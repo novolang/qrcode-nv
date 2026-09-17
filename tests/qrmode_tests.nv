@@ -1,0 +1,244 @@
+// qrmode_tests.nv — the modes, the levels, the segments and the
+// planner, against ISO/IEC 18004's own tables.
+//
+// RED ON PURPOSE: every body under `src/` is a `todo()`, so every
+// assertion here reaches `not implemented: qrcode-nv.qrmode.<fn>`.
+
+use std.test
+use std.list
+use qrfault
+use qrmode
+
+@test
+fn test_the_mode_indicators_are_table_2() [io]
+    // § 7.4.1, Table 2.  Four bits, and they are not 0 1 2 3 — which
+    // is the first place a hand-written encoder goes wrong.
+    test.case("numeric is 1, alphanumeric 2, byte 4, kanji 8")
+    test.assert(qrmode.mode_indicator(QrNumeric) == 1)
+    test.assert(qrmode.mode_indicator(QrAlphanumeric) == 2)
+    test.assert(qrmode.mode_indicator(QrByte) == 4)
+    test.assert(qrmode.mode_indicator(QrKanji) == 8)
+
+    test.case("and the names are the ones the refusals carry")
+    test.assert(qrmode.mode_name(QrNumeric) == "numeric")
+    test.assert(qrmode.mode_name(QrAlphanumeric) == "alphanumeric")
+    test.assert(qrmode.mode_name(QrByte) == "byte")
+    test.assert(qrmode.mode_name(QrKanji) == "kanji")
+
+@test
+fn test_the_error_correction_levels_and_their_two_numberings() [io]
+    test.case("the letters")
+    test.assert(qrmode.ec_name(QrEcLow) == "L")
+    test.assert(qrmode.ec_name(QrEcMedium) == "M")
+    test.assert(qrmode.ec_name(QrEcQuartile) == "Q")
+    test.assert(qrmode.ec_name(QrEcHigh) == "H")
+
+    test.case("read back from a letter, either case")
+    match qrmode.ec_named("q")
+        Some(e) => test.assert(qrmode.ec_name(e) == "Q")
+        None    => test.fail("q is a level")
+    match qrmode.ec_named("H")
+        Some(e) => test.assert(qrmode.ec_name(e) == "H")
+        None    => test.fail("H is a level")
+    match qrmode.ec_named("Z")
+        Some(_) => test.fail("Z is not a level")
+        None    => test.assert(true)
+
+    test.case("the recovery percentages § 7.5 states")
+    test.assert(qrmode.ec_recovery_percent(QrEcLow) == 7)
+    test.assert(qrmode.ec_recovery_percent(QrEcMedium) == 15)
+    test.assert(qrmode.ec_recovery_percent(QrEcQuartile) == 25)
+    test.assert(qrmode.ec_recovery_percent(QrEcHigh) == 30)
+
+    test.case("the FORMAT bits are a different order — § 7.9, Table 12")
+    // L is 1 and M is 0, which is the reverse of the obvious order and
+    // the reason a symbol encoded by a careless implementation reads
+    // at the wrong level or not at all.
+    test.assert(qrmode.ec_format_bits(QrEcLow) == 1)
+    test.assert(qrmode.ec_format_bits(QrEcMedium) == 0)
+    test.assert(qrmode.ec_format_bits(QrEcQuartile) == 3)
+    test.assert(qrmode.ec_format_bits(QrEcHigh) == 2)
+
+@test
+fn test_the_character_sets_are_table_5() [io]
+    test.case("numeric is the ten digits and nothing else")
+    test.assert(qrmode.is_numeric_char(48))   // '0'
+    test.assert(qrmode.is_numeric_char(57))   // '9'
+    test.assert(not qrmode.is_numeric_char(47))
+    test.assert(not qrmode.is_numeric_char(65))   // 'A'
+
+    test.case("alphanumeric holds upper case and NOT lower case")
+    test.assert(qrmode.is_alphanumeric_char(65))   // 'A'
+    test.assert(qrmode.is_alphanumeric_char(90))   // 'Z'
+    test.assert(not qrmode.is_alphanumeric_char(97))   // 'a'
+
+    test.case("and the nine punctuation characters, and no others")
+    test.assert(qrmode.is_alphanumeric_char(32))   // space
+    test.assert(qrmode.is_alphanumeric_char(36))   // '$'
+    test.assert(qrmode.is_alphanumeric_char(37))   // '%'
+    test.assert(qrmode.is_alphanumeric_char(42))   // '*'
+    test.assert(qrmode.is_alphanumeric_char(43))   // '+'
+    test.assert(qrmode.is_alphanumeric_char(45))   // '-'
+    test.assert(qrmode.is_alphanumeric_char(46))   // '.'
+    test.assert(qrmode.is_alphanumeric_char(47))   // '/'
+    test.assert(qrmode.is_alphanumeric_char(58))   // ':'
+    test.assert(not qrmode.is_alphanumeric_char(59))   // ';'
+    test.assert(not qrmode.is_alphanumeric_char(64))   // '@'
+
+    test.case("the Table 5 values, which the pairing arithmetic uses")
+    test.assert(qrmode.alphanumeric_value(48) == 0)   // '0'
+    test.assert(qrmode.alphanumeric_value(65) == 10)   // 'A'
+    test.assert(qrmode.alphanumeric_value(90) == 35)   // 'Z'
+    test.assert(qrmode.alphanumeric_value(32) == 36)   // space
+    test.assert(qrmode.alphanumeric_value(58) == 44)   // ':'
+    test.assert(qrmode.alphanumeric_value(97) == 0 - 1)
+
+@test
+fn test_kanji_mode_is_two_shift_jis_ranges_and_nothing_else() [io]
+    // § 7.4.6: 0x8140 to 0x9FFC and 0xE040 to 0xEBBF.
+    test.case("inside the first range")
+    test.assert(qrmode.is_shift_jis_pair(0x81, 0x40))
+    test.assert(qrmode.is_shift_jis_pair(0x9F, 0xFC))
+
+    test.case("inside the second")
+    test.assert(qrmode.is_shift_jis_pair(0xE0, 0x40))
+    test.assert(qrmode.is_shift_jis_pair(0xEB, 0xBF))
+
+    test.case("and the gap between them is not kanji mode")
+    test.assert(not qrmode.is_shift_jis_pair(0xA0, 0x40))
+    test.assert(not qrmode.is_shift_jis_pair(0xEC, 0x40))
+
+    test.case("single-byte Shift JIS is byte mode, not kanji mode")
+    test.assert(not qrmode.is_shift_jis_pair(0x41, 0x42))
+
+    test.case("a kanji segment counts DOUBLE BYTES, not bytes")
+    match qrmode.kanji_segment([0x93, 0x5F, 0xE4, 0xAA])
+        Ok(s)  => test.assert(s.char_count == 2)
+        Err(_) => test.fail("both pairs are in range")
+
+    test.case("and a pair outside either range is refused at its offset")
+    match qrmode.kanji_segment([0x93, 0x5F, 0xA0, 0x40])
+        Ok(_)  => test.fail("0xA040 is in neither range")
+        Err(e) => test.assert(qrfault.code(e) == "not_shift_jis")
+
+@test
+fn test_a_segment_checks_its_own_character_set() [io]
+    test.case("digits make a numeric segment, and the count is characters")
+    match qrmode.numeric_segment("8675309")
+        Ok(s)  =>
+            test.assert(s.char_count == 7)
+            test.assert(qrmode.mode_name(s.mode) == "numeric")
+        Err(_) => test.fail("those are digits")
+
+    test.case("a non-digit is refused at its offset")
+    match qrmode.numeric_segment("867-5309")
+        Ok(_)  => test.fail("the dash is not a digit")
+        Err(e) => test.assert(qrfault.code(e) == "char_not_in_mode")
+
+    test.case("alphanumeric takes Table 5")
+    match qrmode.alphanumeric_segment("HELLO WORLD")
+        Ok(s)  => test.assert(s.char_count == 11)
+        Err(_) => test.fail("those are all in Table 5")
+
+    test.case("and refuses lower case, which is the whole point of the set")
+    match qrmode.alphanumeric_segment("hello world")
+        Ok(_)  => test.fail("lower case is not in Table 5")
+        Err(e) => test.assert(qrfault.code(e) == "char_not_in_mode")
+
+    test.case("byte mode never refuses, and counts bytes")
+    let b = qrmode.byte_segment([99, 97, 102, 195, 169])
+    test.assert(b.char_count == 5)
+    test.assert(qrmode.mode_name(b.mode) == "byte")
+
+@test
+fn test_eci_is_a_prefix_with_a_length_of_its_own() [io]
+    // § 7.4.2.2: 8 bits for 0..127, 16 for 128..16383, 24 above, plus
+    // the 4-bit mode indicator each time.
+    test.case("UTF-8 is assignment 26, and costs twelve bits")
+    match qrmode.eci_segment(26)
+        Ok(e)  =>
+            test.assert(e.assignment == 26)
+            test.assert(qrmode.eci_bit_length(e) == 12)
+        Err(_) => test.fail("26 is in range")
+
+    test.case("a three-byte designator costs twenty-eight")
+    match qrmode.eci_segment(999999)
+        Ok(e)  => test.assert(qrmode.eci_bit_length(e) == 28)
+        Err(_) => test.fail("999999 is the largest § 7.4.2.3 allows")
+
+    test.case("and one past it is refused")
+    match qrmode.eci_segment(1000000)
+        Ok(_)  => test.fail("out of range")
+        Err(e) => test.assert(qrfault.code(e) == "eci_out_of_range")
+
+@test
+fn test_the_character_count_field_widens_twice() [io]
+    // § 7.4.1, Table 3.  The bands are 1-9, 10-26 and 27-40, and this
+    // is why a segment's cost is not known until the version is.
+    test.case("numeric: 10, 12, 14")
+    test.assert(qrmode.char_count_bits(QrNumeric, 1) == 10)
+    test.assert(qrmode.char_count_bits(QrNumeric, 10) == 12)
+    test.assert(qrmode.char_count_bits(QrNumeric, 27) == 14)
+
+    test.case("alphanumeric: 9, 11, 13")
+    test.assert(qrmode.char_count_bits(QrAlphanumeric, 9) == 9)
+    test.assert(qrmode.char_count_bits(QrAlphanumeric, 26) == 11)
+    test.assert(qrmode.char_count_bits(QrAlphanumeric, 40) == 13)
+
+    test.case("byte: 8, 16, 16")
+    test.assert(qrmode.char_count_bits(QrByte, 1) == 8)
+    test.assert(qrmode.char_count_bits(QrByte, 10) == 16)
+    test.assert(qrmode.char_count_bits(QrByte, 27) == 16)
+
+    test.case("kanji: 8, 10, 12")
+    test.assert(qrmode.char_count_bits(QrKanji, 1) == 8)
+    test.assert(qrmode.char_count_bits(QrKanji, 10) == 10)
+    test.assert(qrmode.char_count_bits(QrKanji, 27) == 12)
+
+@test
+fn test_a_segments_bit_length_is_the_annex_i_number() [io]
+    // Annex I works `01234567` at version 1: 4 bits of mode indicator,
+    // 10 of character count, and 27 of data — three groups of three
+    // digits is 10 + 10, and the last two digits cost 7.
+    test.case("the worked example of Annex I")
+    match qrmode.numeric_segment("01234567")
+        Ok(s)  => test.assert(qrmode.segment_bit_length(s, 1) == 41)
+        Err(_) => test.fail("those are digits")
+
+    test.case("a list's total is the sum")
+    match qrmode.numeric_segment("01234567")
+        Err(_) => test.fail("those are digits")
+        Ok(s)  => test.assert(qrmode.total_bit_length([s, s], 1) == 82)
+
+    test.case("alphanumeric: two characters in eleven bits, an odd one in six")
+    match qrmode.alphanumeric_segment("AC-42")
+        Ok(s)  => test.assert(qrmode.segment_bit_length(s, 1) == 4 + 9 + 11 + 11 + 6)
+        Err(_) => test.fail("all in Table 5")
+
+@test
+fn test_the_planner_switches_modes_where_it_pays() [io]
+    test.case("a single mode when the whole string is one")
+    test.assert(qrmode.mode_name(qrmode.single_mode_for("8675309")) == "numeric")
+    test.assert(qrmode.mode_name(qrmode.single_mode_for("HELLO")) == "alphanumeric")
+    test.assert(qrmode.mode_name(qrmode.single_mode_for("hello")) == "byte")
+
+    test.case("single_mode_for never answers kanji — it takes text, not Shift JIS")
+    test.assert(not qrmode.mode_name(qrmode.single_mode_for("hello")) == "kanji")
+
+    test.case("the planner splits a URL with a long numeric tail")
+    let plan = qrmode.plan("HTTPS://EXAMPLE.COM/3141592", 2)
+    test.assert(list.len(plan) == 2)
+    test.assert(qrmode.mode_name(list.get(plan, 0).mode) == "alphanumeric")
+    test.assert(qrmode.mode_name(list.get(plan, 1).mode) == "numeric")
+
+    test.case("and leaves a SHORT digit run alone, because two switches cost more")
+    // Four digits inside a run of letters is cheaper in alphanumeric
+    // mode than a switch out and back: Annex J's optimisation, and the
+    // reason this is a shortest path and not a greedy scan.
+    let short = qrmode.plan("ABCD1234EFGH", 1)
+    test.assert(list.len(short) == 1)
+
+    test.case("the plan is never longer in bits than the single mode")
+    let one = qrmode.byte_segment([104, 101, 108, 108, 111])
+    test.assert(qrmode.total_bit_length(qrmode.plan("hello", 1), 1)
+                <= qrmode.segment_bit_length(one, 1))

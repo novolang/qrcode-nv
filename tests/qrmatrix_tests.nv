@@ -1,0 +1,227 @@
+// qrmatrix_tests.nv — the grid, the eight masks and the penalty
+// score, against ISO/IEC 18004 § 6.3, § 7.7 and § 7.8.
+//
+// RED ON PURPOSE: every body under `src/` is a `todo()`, so every
+// assertion here reaches `not implemented: qrcode-nv.qrmatrix.<fn>`.
+
+use std.test
+use std.list
+use qrfault
+use qrversion
+use qrmatrix
+
+fn v(n: Int) -> QrVersion
+    qrversion.version(n)!
+
+// A version 1 symbol with its function patterns placed and nothing
+// else — the state every placement test starts from.
+fn patterned() -> QrMatrix
+    qrmatrix.with_function_patterns(qrmatrix.blank(v(1), QrEcLow))
+
+@test
+fn test_a_module_is_three_valued_and_free_is_not_dark() [io]
+    // A grid of booleans needs a second grid beside it saying which of
+    // the booleans mean anything.  This is that second grid, folded
+    // into the first.
+    test.case("dark is dark, light and free are not")
+    test.assert(qrmatrix.is_dark_module(QrDark))
+    test.assert(not qrmatrix.is_dark_module(QrLight))
+    test.assert(not qrmatrix.is_dark_module(QrFree))
+
+    test.case("a blank matrix is entirely free, so nothing is dark")
+    test.assert(qrmatrix.dark_count(qrmatrix.blank(v(1), QrEcLow)) == 0)
+
+@test
+fn test_a_blank_matrix_is_the_versions_size_without_a_quiet_zone() [io]
+    // § 6.3 puts four light modules around the symbol.  They are the
+    // drawing's, not the symbol's, which is why they are not here.
+    test.case("version 1 is 21 across, not 29")
+    test.assert(qrmatrix.blank(v(1), QrEcLow).side == 21)
+
+    test.case("version 40 is 177")
+    test.assert(qrmatrix.blank(v(40), QrEcHigh).side == 177)
+
+    test.case("and the quiet zone is stated as a constant, not hidden")
+    test.assert(qrmatrix.QR_QUIET_ZONE == 4)
+
+    test.case("a blank matrix has no mask yet")
+    match qrmatrix.blank(v(1), QrEcLow).mask
+        Some(_) => test.fail("nothing has been masked")
+        None    => test.assert(true)
+
+@test
+fn test_the_function_patterns_are_placed_where_section_6_3_says() [io]
+    let m = patterned()
+
+    test.case("the three finder patterns are dark at their corners")
+    test.assert(qrmatrix.is_dark(m, 0, 0))
+    test.assert(qrmatrix.is_dark(m, 0, 20))
+    test.assert(qrmatrix.is_dark(m, 20, 0))
+
+    test.case("and there is no fourth finder — the bottom right is data")
+    test.assert(not qrmatrix.is_function(m, 20, 20))
+
+    test.case("the separators around a finder are light")
+    test.assert(not qrmatrix.is_dark(m, 7, 7))
+    test.assert(qrmatrix.is_function(m, 7, 7))
+
+    test.case("the timing patterns alternate along row and column 6")
+    test.assert(qrmatrix.is_dark(m, 6, 8))
+    test.assert(not qrmatrix.is_dark(m, 6, 9))
+    test.assert(qrmatrix.is_dark(m, 8, 6))
+
+    test.case("the dark module of § 6.3.6 is at (4v + 9, 8)")
+    test.assert(qrmatrix.is_dark(m, 13, 8))
+
+    test.case("version 1 has no alignment pattern")
+    test.assert(list.len(qrversion.alignment_centres(v(1))) == 0)
+
+    test.case("but version 2 does, centred at (18, 18)")
+    let m2 = qrmatrix.with_function_patterns(qrmatrix.blank(v(2), QrEcLow))
+    test.assert(qrmatrix.is_dark(m2, 18, 18))
+    test.assert(qrmatrix.is_function(m2, 18, 18))
+
+@test
+fn test_reading_outside_the_grid_answers_light_and_function() [io]
+    // So that a renderer's edge arithmetic and a placement walk that
+    // runs off the edge both do the harmless thing rather than panic.
+    let m = patterned()
+
+    test.case("outside is light")
+    test.assert(qrmatrix.is_dark_module(qrmatrix.module_at(m, 99, 99)) == false)
+    test.assert(not qrmatrix.is_dark(m, 0 - 1, 0))
+
+    test.case("and outside is function, so a walk skips it")
+    test.assert(qrmatrix.is_function(m, 99, 99))
+    test.assert(qrmatrix.is_function(m, 0 - 1, 0 - 1))
+
+    test.case("a write outside the grid is dropped rather than refused")
+    test.assert(qrmatrix.set_module(m, 99, 99, QrDark).side == 21)
+
+@test
+fn test_setting_a_module_answers_a_new_matrix() [io]
+    let m = patterned()
+
+    test.case("the module set reads back")
+    test.assert(qrmatrix.is_dark(qrmatrix.set_module(m, 10, 10, QrDark), 10, 10))
+
+    test.case("and the original is untouched")
+    test.assert(not qrmatrix.is_dark(m, 10, 10))
+
+@test
+fn test_the_placement_order_is_the_zigzag_of_section_7_7_3() [io]
+    let m = patterned()
+    let order = qrmatrix.placement_order(m)
+
+    test.case("it covers every data module and no function module")
+    // Version 1 is 441 modules, 208 of which carry data: 26 codewords
+    // of eight bits, and no remainder bits at version 1.
+    test.assert(list.len(order) == 208)
+
+    test.case("it starts at the bottom right corner")
+    let first = list.get(order, 0)
+    test.assert(first.0 == 20)
+    test.assert(first.1 == 20)
+
+    test.case("and a codeword stream placed into it fills the matrix")
+    test.assert(qrmatrix.place_codewords(m, list.zeros(26)).side == 21)
+
+@test
+fn test_the_mask_formulas_are_table_10() [io]
+    test.case("the numbers read back")
+    test.assert(qrmatrix.mask_number(QrMask0) == 0)
+    test.assert(qrmatrix.mask_number(QrMask7) == 7)
+
+    test.case("a number outside 0 to 7 is refused")
+    match qrmatrix.mask_numbered(3)
+        Ok(k)  => test.assert(qrmatrix.mask_number(k) == 3)
+        Err(_) => test.fail("3 is a mask")
+    match qrmatrix.mask_numbered(8)
+        Ok(_)  => test.fail("8 is not a mask")
+        Err(e) => test.assert(qrfault.code(e) == "mask_out_of_range")
+
+    test.case("mask 0 is (row + column) mod 2")
+    test.assert(qrmatrix.mask_covers(QrMask0, 0, 0))
+    test.assert(not qrmatrix.mask_covers(QrMask0, 0, 1))
+    test.assert(qrmatrix.mask_covers(QrMask0, 1, 1))
+
+    test.case("mask 1 is row mod 2 — it ignores the column")
+    test.assert(qrmatrix.mask_covers(QrMask1, 0, 7))
+    test.assert(not qrmatrix.mask_covers(QrMask1, 1, 7))
+
+    test.case("mask 2 is column mod 3 — it ignores the row")
+    test.assert(qrmatrix.mask_covers(QrMask2, 5, 0))
+    test.assert(qrmatrix.mask_covers(QrMask2, 5, 3))
+    test.assert(not qrmatrix.mask_covers(QrMask2, 5, 4))
+
+    test.case("mask 3 is (row + column) mod 3")
+    test.assert(qrmatrix.mask_covers(QrMask3, 1, 2))
+    test.assert(not qrmatrix.mask_covers(QrMask3, 1, 1))
+
+    test.case("mask 4 is ((row / 2) + (column / 3)) mod 2")
+    test.assert(qrmatrix.mask_covers(QrMask4, 0, 0))
+    test.assert(not qrmatrix.mask_covers(QrMask4, 2, 0))
+
+    test.case("mask 5, 6 and 7 all use the product of the coordinates")
+    test.assert(qrmatrix.mask_covers(QrMask5, 0, 0))
+    test.assert(qrmatrix.mask_covers(QrMask6, 0, 0))
+    test.assert(qrmatrix.mask_covers(QrMask7, 0, 0))
+    test.assert(not qrmatrix.mask_covers(QrMask5, 1, 1))
+
+@test
+fn test_masking_leaves_the_function_patterns_alone() [io]
+    // The whole of § 7.8.1, and the mistake that produces a symbol no
+    // reader can lock on to.
+    let m = patterned()
+    let masked = qrmatrix.apply_mask(m, QrMask0)
+
+    test.case("the finder pattern's corner is still dark")
+    test.assert(qrmatrix.is_dark(masked, 0, 0))
+
+    test.case("the timing pattern still alternates")
+    test.assert(qrmatrix.is_dark(masked, 6, 8))
+    test.assert(not qrmatrix.is_dark(masked, 6, 9))
+
+    test.case("and the matrix now names its mask")
+    match masked.mask
+        Some(k) => test.assert(qrmatrix.mask_number(k) == 0)
+        None    => test.fail("it was just masked")
+
+@test
+fn test_the_four_penalty_rules_are_scored_separately() [io]
+    // § 7.8.3.1.  Separately, because an implementation that reports
+    // one total cannot say which rule disagreed with the standard.
+    test.case("the total is the sum of the four")
+    let p = QrPenalty { adjacent: 3, blocks: 9, finder_like: 40, balance: 10 }
+    test.assert(qrmatrix.penalty_total(p) == 62)
+
+    test.case("an all-free matrix scores nothing for adjacency")
+    test.assert(qrmatrix.penalty_score(qrmatrix.blank(v(1), QrEcLow)).adjacent == 0)
+
+    test.case("rule 4 punishes an imbalance, and a blank symbol is all light")
+    // Every module light is 0% dark, fifty points from the ideal half,
+    // which § 7.8.3.1 scores at ten per five per cent.
+    test.assert(qrmatrix.penalty_score(qrmatrix.blank(v(1), QrEcLow)).balance == 100)
+
+    test.case("a patterned symbol scores something under every rule")
+    let s = qrmatrix.penalty_score(qrmatrix.apply_mask(patterned(), QrMask0))
+    test.assert(s.adjacent >= 0)
+    test.assert(s.blocks >= 0)
+    test.assert(s.finder_like >= 0)
+    test.assert(s.balance >= 0)
+
+@test
+fn test_the_best_mask_is_the_lowest_score_with_ties_to_the_lower_number() [io]
+    let m = qrmatrix.place_codewords(patterned(), list.zeros(26))
+
+    test.case("the chosen mask is one of the eight")
+    test.assert(qrmatrix.mask_number(qrmatrix.best_mask(m)) >= 0)
+    test.assert(qrmatrix.mask_number(qrmatrix.best_mask(m)) <= 7)
+
+    test.case("and no other mask scores lower than the one chosen")
+    let best = qrmatrix.penalty_total(
+                   qrmatrix.penalty_score(qrmatrix.apply_mask(m, qrmatrix.best_mask(m))))
+    test.assert(best <= qrmatrix.penalty_total(
+                    qrmatrix.penalty_score(qrmatrix.apply_mask(m, QrMask0))))
+    test.assert(best <= qrmatrix.penalty_total(
+                    qrmatrix.penalty_score(qrmatrix.apply_mask(m, QrMask7))))

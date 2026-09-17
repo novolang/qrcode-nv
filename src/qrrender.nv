@@ -1,0 +1,366 @@
+// qrrender.nv — the symbol as something a person or a printer can
+// see: text, an SVG document, and a raster mask.
+//
+// THREE OUTPUTS, AND THEY ARE NOT THE SAME PICTURE
+//
+// A symbol is a grid of modules and nothing else.  Turning it into an
+// image is a second decision — how large a module is, what the two
+// colours are, how wide the quiet zone is — and the three renderers
+// here differ in what they can express, not in what they draw.
+//
+//   text     a terminal.  Two rows of modules per line of text, using
+//            the half-block characters, so a version 40 symbol is 89
+//            lines rather than 177 and a square module stays square.
+//   svg      a drawing.  One path, one fill, no bitmap: the symbol
+//            scales to any size and composites into a larger document.
+//   raster   a mask.  One byte per pixel, which an image encoder —
+//            png-nv, gif-nv — turns into a file, and which a compositor
+//            blends.
+//
+// THE QUIET ZONE IS THE RENDERER'S, NOT THE SYMBOL'S
+//
+// ISO/IEC 18004 § 6.3 requires four light modules on every side.  The
+// matrix does not carry them, because they are not modules of the
+// symbol; every function here adds them, and every one of them refuses
+// a request for fewer than four rather than drawing a symbol that will
+// not scan.  A caller that genuinely wants a bleed to the edge — a
+// symbol inside a frame that already provides the margin — passes the
+// four and crops its own picture.
+//
+// THE SVG IS ONE PATH
+//
+// The obvious rendering is one `<rect>` per dark module, and a version
+// 40 symbol has about fifteen thousand of them.  A single path with
+// one four-command subpath per dark module is a fifth of the bytes and
+// one fill operation, and a renderer that merges horizontal runs first
+// is smaller again.  `to_svg_path` is that path on its own, for a
+// caller compositing it into a drawing; `to_svg` is the document.
+
+use qrmatrix
+use srgb
+use svgdoc
+use svgpath
+use svgwrite
+
+// How a symbol is drawn.
+//
+// The colours are `Srgba8` — color-nv's type, which is the type
+// svg-nv's styles are painted with — so that nothing is converted at
+// the boundary between the two packages.
+pub struct QrRenderStyle
+    // The colour of the dark modules.  ISO/IEC 18004 § 6.2 requires
+    // this to be the darker of the two: a symbol drawn in reverse
+    // video is refused by most readers.
+    dark: Srgba8
+    // The colour of the light modules and of the quiet zone.
+    light: Srgba8
+    // How many image pixels, or SVG user units, one module is.
+    scale: Int
+    // How many modules of quiet zone on every side.  Four is the
+    // minimum § 6.3 permits.
+    quiet: Int
+
+// A symbol as one byte per pixel.
+//
+// The quiet zone is included, so `width` is `(side + 2 * quiet) *
+// scale` and the buffer is ready to hand to an image encoder without
+// further arithmetic.
+pub struct QrRaster
+    // Pixels across.
+    width: Int
+    // Pixels down.  The same as `width`: a symbol is square.
+    height: Int
+    // One byte per pixel, row-major.  `1` where the module is dark and
+    // `0` where it is light — a MASK, not a greyscale image, so that
+    // a compositor can use it as an alpha channel directly and
+    // `to_grey8` is the one line that turns it into ink.
+    mask: [u8]
+
+// The ordinary drawing style: black on white, four modules of quiet
+// zone, one pixel per module.
+//
+// ```novo
+// use qrrender
+//
+// fn main() [io]
+//     println("${qrrender.default_style().quiet}")   // 4
+// ```
+pub fn default_style() -> QrRenderStyle []
+    todo("qrcode-nv.qrrender.default_style")
+
+// The same style at a different scale.
+//
+// ```novo
+// use qrrender
+//
+// fn main() [io]
+//     println("${qrrender.with_scale(qrrender.default_style(), 8).scale}")   // 8
+// ```
+pub fn with_scale(s: QrRenderStyle, scale: Int) -> QrRenderStyle []
+    todo("qrcode-nv.qrrender.with_scale")
+
+// The same style with a different quiet zone.
+//
+// ```novo
+// use qrrender
+//
+// fn main() [io]
+//     println("${qrrender.with_quiet(qrrender.default_style(), 6).quiet}")   // 6
+// ```
+pub fn with_quiet(s: QrRenderStyle, quiet: Int) -> QrRenderStyle []
+    todo("qrcode-nv.qrrender.with_quiet")
+
+// The same style with two colours of the caller's choosing.
+//
+// ```novo
+// use srgb
+// use qrrender
+//
+// fn main() [io]
+//     let s = qrrender.with_colors(qrrender.default_style(),
+//                                  srgb.opaque(srgb.rgb8(0, 32, 96)),
+//                                  srgb.opaque(srgb.white()))
+//     println("${s.dark.a}")                    // 255, fully opaque
+// ```
+pub fn with_colors(s: QrRenderStyle, dark: Srgba8, light: Srgba8) -> QrRenderStyle []
+    todo("qrcode-nv.qrrender.with_colors")
+
+// Whether a style would draw a symbol that scans: a quiet zone of at
+// least four modules, a scale of at least one, and a dark colour
+// darker than the light one.
+//
+// A predicate rather than a silent correction, because a caller that
+// chose a two-module quiet zone to fit a layout needs to know the
+// symbol will fail in the field rather than on the screen.
+//
+// ```novo
+// use qrrender
+//
+// fn main() [io]
+//     println("${qrrender.style_is_scannable(qrrender.default_style())}")   // true
+// ```
+pub fn style_is_scannable(s: QrRenderStyle) -> Bool []
+    todo("qrcode-nv.qrrender.style_is_scannable")
+
+// How many pixels across the drawing will be: `(side + 2 * quiet) *
+// scale`.
+//
+// ```novo
+// use qrmode
+// use qrversion
+// use qrmatrix
+// use qrrender
+//
+// fn main() [io]
+//     match qrversion.version(1)
+//         Ok(v)  => println("${qrrender.pixel_size(qrmatrix.blank(v, QrEcLow), qrrender.default_style())}")   // 29
+//         Err(_) => println("out of range")
+// ```
+pub fn pixel_size(m: QrMatrix, s: QrRenderStyle) -> Int []
+    todo("qrcode-nv.qrrender.pixel_size")
+
+// The symbol as lines of text, using the half-block characters so that
+// two module rows share one line and a module stays square.
+//
+// What a command-line tool prints.  The quiet zone is included, so the
+// output pasted into a terminal scans.
+//
+// ```novo
+// use std.list
+// use qrmode
+// use qrcode
+// use qrrender
+//
+// fn main() [io]
+//     match qrcode.encode("HELLO WORLD", QrEcQuartile)
+//         Err(e) => println(e.message())
+//         Ok(m)  =>
+//             match qrrender.to_text(m, qrrender.default_style())
+//                 Ok(lines) => println("${list.len(lines)}")
+//                 Err(e)    => println(e.message())
+// ```
+pub fn to_text(m: QrMatrix, s: QrRenderStyle) -> Result<[Str], QrFault> []
+    todo("qrcode-nv.qrrender.to_text")
+
+// The same thing with one character per module — two characters wide
+// per module, so it stays square — for a terminal or a log that cannot
+// show half blocks.
+//
+// ```novo
+// use std.list
+// use qrmode
+// use qrcode
+// use qrrender
+//
+// fn main() [io]
+//     match qrcode.encode("HELLO WORLD", QrEcQuartile)
+//         Err(e) => println(e.message())
+//         Ok(m)  =>
+//             match qrrender.to_text_full(m, qrrender.default_style(), "##", "  ")
+//                 Ok(lines) => println("${list.len(lines)}")   // 29
+//                 Err(e)    => println(e.message())
+// ```
+pub fn to_text_full(m: QrMatrix, s: QrRenderStyle, dark: Str,
+                    light: Str) -> Result<[Str], QrFault> []
+    todo("qrcode-nv.qrrender.to_text_full")
+
+// The dark modules as one SVG path, in module coordinates with the
+// quiet zone's offset already applied.
+//
+// FOR COMPOSITING.  A caller putting a symbol into a larger drawing —
+// under a transform, inside a group, beside a caption — wants the
+// geometry, not a document, and this is it.  Horizontal runs of dark
+// modules are merged into one rectangle, which is what makes a version
+// 40 path a quarter of the size of one rectangle per module.
+//
+// ```novo
+// use svgpath
+// use qrmode
+// use qrcode
+// use qrrender
+//
+// fn main() [io]
+//     match qrcode.encode("HELLO WORLD", QrEcQuartile)
+//         Err(e) => println(e.message())
+//         Ok(m)  =>
+//             match qrrender.to_svg_path(m, qrrender.default_style())
+//                 Ok(p)  => println("${svgpath.command_count(p)}")
+//                 Err(e) => println(e.message())
+// ```
+pub fn to_svg_path(m: QrMatrix, s: QrRenderStyle) -> Result<SvgPath, QrFault> []
+    todo("qrcode-nv.qrrender.to_svg_path")
+
+// The symbol as one SVG node: the path above, filled with the style's
+// dark colour.
+//
+// ```novo
+// use svgdoc
+// use qrmode
+// use qrcode
+// use qrrender
+//
+// fn main() [io]
+//     match qrcode.encode("HELLO WORLD", QrEcQuartile)
+//         Err(e) => println(e.message())
+//         Ok(m)  =>
+//             match qrrender.to_svg_node(m, qrrender.default_style())
+//                 Ok(n)  => println("${svgdoc.node_count(n)}")
+//                 Err(e) => println(e.message())
+// ```
+pub fn to_svg_node(m: QrMatrix, s: QrRenderStyle) -> Result<SvgNode, QrFault> []
+    todo("qrcode-nv.qrrender.to_svg_node")
+
+// The symbol as a complete SVG document: a background rectangle in the
+// light colour, and the path in the dark one.
+//
+// The background is drawn rather than left transparent, because § 6.3
+// is about light modules and a transparent quiet zone over a dark page
+// is a symbol that does not scan.
+//
+// ```novo
+// use svgdoc
+// use qrmode
+// use qrcode
+// use qrrender
+//
+// fn main() [io]
+//     match qrcode.encode("HELLO WORLD", QrEcQuartile)
+//         Err(e) => println(e.message())
+//         Ok(m)  =>
+//             match qrrender.to_svg(m, qrrender.with_scale(qrrender.default_style(), 8))
+//                 Ok(d)  => println("${svgdoc.child_count_of(d)}")   // 2
+//                 Err(e) => println(e.message())
+// ```
+pub fn to_svg(m: QrMatrix, s: QrRenderStyle) -> Result<SvgDocument, QrFault> []
+    todo("qrcode-nv.qrrender.to_svg")
+
+// The SVG document serialised.
+//
+// The one-line path for a caller that wants a file.  It is
+// `svgwrite.to_string` over `to_svg`, and it exists so that the
+// ordinary case does not have to know svg-nv's name.
+//
+// ```novo
+// use std.str
+// use qrmode
+// use qrcode
+// use qrrender
+//
+// fn main() [io]
+//     match qrcode.encode("HELLO WORLD", QrEcQuartile)
+//         Err(e) => println(e.message())
+//         Ok(m)  =>
+//             match qrrender.to_svg_string(m, qrrender.default_style())
+//                 Ok(text) => println("${str.len(text) > 0}")   // true
+//                 Err(e)   => println(e.message())
+// ```
+pub fn to_svg_string(m: QrMatrix, s: QrRenderStyle) -> Result<Str, QrFault> []
+    todo("qrcode-nv.qrrender.to_svg_string")
+
+// The symbol as one byte per pixel, `1` dark and `0` light, quiet zone
+// included.
+//
+// What an image encoder takes.  A mask rather than a greyscale image
+// because the two colours are the caller's and belong in the encoder's
+// palette, not smeared into every pixel of a buffer.
+//
+// ```novo
+// use qrmode
+// use qrcode
+// use qrrender
+//
+// fn main() [io]
+//     match qrcode.encode("HELLO WORLD", QrEcQuartile)
+//         Err(e) => println(e.message())
+//         Ok(m)  =>
+//             match qrrender.to_raster(m, qrrender.with_scale(qrrender.default_style(), 4))
+//                 Ok(r)  => println("${r.width}")   // 116
+//                 Err(e) => println(e.message())
+// ```
+pub fn to_raster(m: QrMatrix, s: QrRenderStyle) -> Result<QrRaster, QrFault> []
+    todo("qrcode-nv.qrrender.to_raster")
+
+// The mask painted with the style's two colours, as eight-bit grey.
+//
+// `0` for the dark colour's luminance and `255` for the light one's,
+// so the buffer is a greyscale image an encoder writes without a
+// palette.
+//
+// ```novo
+// use std.list
+// use qrmode
+// use qrcode
+// use qrrender
+//
+// fn main() [io]
+//     match qrcode.encode("HELLO WORLD", QrEcQuartile)
+//         Err(e) => println(e.message())
+//         Ok(m)  =>
+//             match qrrender.to_raster(m, qrrender.default_style())
+//                 Err(e) => println(e.message())
+//                 Ok(r)  => println("${list.len(qrrender.to_grey8(r, qrrender.default_style()))}")
+// ```
+pub fn to_grey8(r: QrRaster, s: QrRenderStyle) -> [u8] []
+    todo("qrcode-nv.qrrender.to_grey8")
+
+// The mask painted with the style's two colours, as four bytes per
+// pixel in red, green, blue, alpha order.
+//
+// What a compositor blends and what an RGBA encoder writes.
+//
+// ```novo
+// use std.list
+// use qrmode
+// use qrcode
+// use qrrender
+//
+// fn main() [io]
+//     match qrcode.encode("HELLO WORLD", QrEcQuartile)
+//         Err(e) => println(e.message())
+//         Ok(m)  =>
+//             match qrrender.to_raster(m, qrrender.default_style())
+//                 Err(e) => println(e.message())
+//                 Ok(r)  => println("${list.len(qrrender.to_rgba8(r, qrrender.default_style()))}")
+// ```
+pub fn to_rgba8(r: QrRaster, s: QrRenderStyle) -> [u8] []
+    todo("qrcode-nv.qrrender.to_rgba8")

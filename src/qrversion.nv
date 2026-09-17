@@ -1,0 +1,358 @@
+// qrversion.nv — the forty symbol sizes, what each one holds, and how
+// its codewords are cut into error-correction blocks.
+//
+// A VERSION IS A SIZE, AND NOTHING ELSE
+//
+// ISO/IEC 18004 § 6.1 numbers the symbol sizes 1 to 40.  Version `v`
+// is `4v + 17` modules on a side: 21 for version 1, 177 for version
+// 40.  Everything else about a version — how many codewords it holds,
+// where its alignment patterns sit, how its data is blocked — is a
+// table in the standard, and the tables are what this module is.
+//
+// THE BLOCK PLAN IS THE TABLE PEOPLE GET WRONG
+//
+// § 7.5.1 Table 9 cuts the data codewords of a version into one or two
+// GROUPS of blocks, and the two groups differ by exactly one data
+// codeword.  Version 5-Q, for instance, is two blocks of 15 data
+// codewords and two of 16, each with 18 error-correction codewords.
+// An encoder that treated every block as the same size produces a
+// symbol that scans on some readers and not others, because the
+// interleaving in § 7.6 puts the codewords back in a specific order.
+//
+// So `block_plan` answers the whole row of the table as one value, and
+// `QrBlockPlan` has separate counts for the two groups rather than a
+// list of sizes: the table has exactly two, always, and a list would
+// invite a caller to build one that the standard does not contain.
+//
+// THE CAPACITY FUNCTIONS COME IN TWO KINDS
+//
+// `data_codewords` is the table.  `data_bits` is that times eight,
+// minus nothing — the remainder bits of § 7.7 are added AFTER the
+// codewords are placed, are always zero, and are not capacity.  A
+// caller sizing its payload wants `data_bits`; a caller building the
+// bit stream wants both, because the terminator of § 7.4.9 is at most
+// four bits and is truncated when it would not fit.
+
+use qrfault
+use qrmode
+
+// The smallest symbol size: 21 modules on a side.
+pub const QR_MIN_VERSION = 1
+
+// The largest symbol size: 177 modules on a side.
+pub const QR_MAX_VERSION = 40
+
+// One symbol size, 1 to 40.
+//
+// A type rather than a bare `Int` so that a function taking one cannot
+// be handed a mask number or a scale by mistake, and so that a value
+// that exists has already been range-checked.
+//
+// ```novo
+// use qrversion
+//
+// fn main() [io]
+//     match qrversion.version(7)
+//         Ok(v)  => println("${qrversion.side_modules(v)}")   // 45
+//         Err(e) => println(e.message())
+// ```
+pub struct QrVersion
+    // The number, 1 to 40.
+    number: Int
+
+// How one version's codewords are cut into error-correction blocks at
+// one error-correction level — one row of § 7.5.1 Table 9.
+//
+// ```novo
+// use qrmode
+// use qrversion
+//
+// fn main() [io]
+//     match qrversion.version(5)
+//         Ok(v)  =>
+//             let p = qrversion.block_plan(v, QrEcQuartile)
+//             println("${p.group1_blocks} + ${p.group2_blocks}")   // 2 + 2
+//         Err(e) => println(e.message())
+// ```
+pub struct QrBlockPlan
+    // How many error-correction codewords each block carries.  The
+    // same for every block of a version and level, which is what makes
+    // the interleaving of § 7.6 work at all.
+    ec_per_block: Int
+    // How many blocks are in the first group.
+    group1_blocks: Int
+    // How many data codewords each block of the first group carries.
+    group1_data: Int
+    // How many blocks are in the second group.  Zero for the versions
+    // whose table row has one group.
+    group2_blocks: Int
+    // How many data codewords each block of the second group carries.
+    // Always `group1_data + 1` when there is a second group.
+    group2_data: Int
+
+// The version a number names, or `QrVersionOutOfRange`.
+//
+// ```novo
+// use qrversion
+//
+// fn main() [io]
+//     match qrversion.version(41)
+//         Ok(_)  => println("this cannot happen")
+//         Err(e) => println(e.message())
+// ```
+pub fn version(number: Int) -> Result<QrVersion, QrFault> []
+    todo("qrcode-nv.qrversion.version")
+
+// The version's number, 1 to 40.
+//
+// ```novo
+// use qrversion
+//
+// fn main() [io]
+//     match qrversion.version(7)
+//         Ok(v)  => println("${qrversion.number_of(v)}")   // 7
+//         Err(_) => println("out of range")
+// ```
+pub fn number_of(v: QrVersion) -> Int []
+    todo("qrcode-nv.qrversion.number_of")
+
+// How many modules the symbol is on a side: `4 * number + 17`,
+// quiet zone excluded (§ 6.1).
+//
+// ```novo
+// use qrversion
+//
+// fn main() [io]
+//     match qrversion.version(40)
+//         Ok(v)  => println("${qrversion.side_modules(v)}")   // 177
+//         Err(_) => println("out of range")
+// ```
+pub fn side_modules(v: QrVersion) -> Int []
+    todo("qrcode-nv.qrversion.side_modules")
+
+// The row and column centres of the alignment patterns (§ 6.3.5,
+// Table E.1).
+//
+// Empty for version 1, which has none.  The list is the coordinates on
+// one axis, and a pattern sits at every pair of them except the three
+// that would collide with a finder pattern — which is a rule of the
+// placement, not of this list, so this list is the table exactly.
+//
+// ```novo
+// use qrversion
+// use std.list
+//
+// fn main() [io]
+//     match qrversion.version(7)
+//         Ok(v)  => println("${list.len(qrversion.alignment_centres(v))}")   // 3
+//         Err(_) => println("out of range")
+// ```
+pub fn alignment_centres(v: QrVersion) -> [Int] []
+    todo("qrcode-nv.qrversion.alignment_centres")
+
+// How many codewords the symbol holds in total, data and
+// error-correction together (§ 7.5.1).
+//
+// ```novo
+// use qrversion
+//
+// fn main() [io]
+//     match qrversion.version(1)
+//         Ok(v)  => println("${qrversion.total_codewords(v)}")   // 26
+//         Err(_) => println("out of range")
+// ```
+pub fn total_codewords(v: QrVersion) -> Int []
+    todo("qrcode-nv.qrversion.total_codewords")
+
+// How many of those codewords carry data at this error-correction
+// level.
+//
+// ```novo
+// use qrmode
+// use qrversion
+//
+// fn main() [io]
+//     match qrversion.version(1)
+//         Ok(v)  => println("${qrversion.data_codewords(v, QrEcLow)}")   // 19
+//         Err(_) => println("out of range")
+// ```
+pub fn data_codewords(v: QrVersion, ec: QrEcLevel) -> Int []
+    todo("qrcode-nv.qrversion.data_codewords")
+
+// How many carry error correction: `total_codewords - data_codewords`.
+//
+// ```novo
+// use qrmode
+// use qrversion
+//
+// fn main() [io]
+//     match qrversion.version(1)
+//         Ok(v)  => println("${qrversion.ec_codewords(v, QrEcLow)}")   // 7
+//         Err(_) => println("out of range")
+// ```
+pub fn ec_codewords(v: QrVersion, ec: QrEcLevel) -> Int []
+    todo("qrcode-nv.qrversion.ec_codewords")
+
+// The data capacity in bits: `data_codewords * 8`.
+//
+// The number a segment list is measured against, and the number
+// `QrDataTooLong` reports as `bits_available`.
+//
+// ```novo
+// use qrmode
+// use qrversion
+//
+// fn main() [io]
+//     match qrversion.version(1)
+//         Ok(v)  => println("${qrversion.data_bits(v, QrEcLow)}")   // 152
+//         Err(_) => println("out of range")
+// ```
+pub fn data_bits(v: QrVersion, ec: QrEcLevel) -> Int []
+    todo("qrcode-nv.qrversion.data_bits")
+
+// The block plan — one row of § 7.5.1 Table 9.
+//
+// ```novo
+// use qrmode
+// use qrversion
+//
+// fn main() [io]
+//     match qrversion.version(1)
+//         Ok(v)  => println("${qrversion.block_plan(v, QrEcLow).ec_per_block}")   // 7
+//         Err(_) => println("out of range")
+// ```
+pub fn block_plan(v: QrVersion, ec: QrEcLevel) -> QrBlockPlan []
+    todo("qrcode-nv.qrversion.block_plan")
+
+// How many blocks the plan has in total: `group1_blocks +
+// group2_blocks`.
+//
+// ```novo
+// use qrmode
+// use qrversion
+//
+// fn main() [io]
+//     match qrversion.version(5)
+//         Ok(v)  => println("${qrversion.block_count(qrversion.block_plan(v, QrEcQuartile))}")   // 4
+//         Err(_) => println("out of range")
+// ```
+pub fn block_count(p: QrBlockPlan) -> Int []
+    todo("qrcode-nv.qrversion.block_count")
+
+// How many remainder bits § 7.7 adds after the last codeword: 0, 3, 4
+// or 7, depending only on the version.
+//
+// They are always zero and they are not capacity.  They exist because
+// the module count of some versions is not a multiple of eight, and a
+// decoder that did not expect them would read the last codeword from
+// the wrong place.
+//
+// ```novo
+// use qrversion
+//
+// fn main() [io]
+//     match qrversion.version(2)
+//         Ok(v)  => println("${qrversion.remainder_bits(v)}")   // 7
+//         Err(_) => println("out of range")
+// ```
+pub fn remainder_bits(v: QrVersion) -> Int []
+    todo("qrcode-nv.qrversion.remainder_bits")
+
+// How many characters of one mode this version and level hold, when
+// the whole symbol is that one mode.
+//
+// The number printed in every "capacity table" on the web, and the one
+// a caller sizing a field wants.  A mixed-mode message holds more or
+// less than this, which is why it is stated as a single-mode number.
+//
+// ```novo
+// use qrmode
+// use qrversion
+//
+// fn main() [io]
+//     match qrversion.version(1)
+//         Ok(v)  => println("${qrversion.capacity_chars(v, QrEcLow, QrNumeric)}")   // 41
+//         Err(_) => println("out of range")
+// ```
+pub fn capacity_chars(v: QrVersion, ec: QrEcLevel, m: QrMode) -> Int []
+    todo("qrcode-nv.qrversion.capacity_chars")
+
+// The smallest version between `min` and `max` that holds this
+// segment list at this level, or the refusal that says why none does.
+//
+// A SEARCH AND NOT A FORMULA, because a segment's bit length depends
+// on the version — the character count field widens at version 10 and
+// at version 27 — so a list that fits version 9 by two bits may not
+// fit version 10 by the same measure.  The search walks upwards and
+// re-measures at each step.
+//
+// `QrVersionTooSmall` when `max` is the obstacle and a larger version
+// would have worked; `QrDataTooLong` when even version 40 does not.
+// `qrfault.is_retryable` is the predicate that tells them apart.
+//
+// ```novo
+// use qrmode
+// use qrversion
+//
+// fn main() [io]
+//     match qrmode.numeric_segment("8675309")
+//         Err(_) => println("not digits")
+//         Ok(s)  =>
+//             match qrversion.smallest_for([s], QrEcMedium, 1, 40)
+//                 Ok(v)  => println("${qrversion.number_of(v)}")   // 1
+//                 Err(e) => println(e.message())
+// ```
+pub fn smallest_for(segments: [QrSegment], ec: QrEcLevel, min: Int,
+                    max: Int) -> Result<QrVersion, QrFault> []
+    todo("qrcode-nv.qrversion.smallest_for")
+
+// The strongest error-correction level this version holds the segments
+// at, or `None`.
+//
+// The other half of the size question.  A caller with a fixed symbol
+// size — a label of a known width — wants the most robust symbol that
+// fits, not the smallest one, and this is that search: H, then Q, then
+// M, then L.
+//
+// ```novo
+// use qrmode
+// use qrversion
+//
+// fn main() [io]
+//     match qrmode.numeric_segment("8675309")
+//         Err(_) => println("not digits")
+//         Ok(s)  =>
+//             match qrversion.strongest_level([s], 4)
+//                 Some(e) => println(qrmode.ec_name(e))
+//                 None    => println("does not fit at any level")
+// ```
+pub fn strongest_level(segments: [QrSegment], version: Int) -> ?QrEcLevel []
+    todo("qrcode-nv.qrversion.strongest_level")
+
+// The eighteen-bit version information § 7.10 writes into versions 7
+// and above, BCH(18,6) check bits included, or `0` below version 7.
+//
+// ```novo
+// use qrversion
+//
+// fn main() [io]
+//     match qrversion.version(7)
+//         Ok(v)  => println("${qrversion.version_info_bits(v)}")   // 0x07C94
+//         Err(_) => println("out of range")
+// ```
+pub fn version_info_bits(v: QrVersion) -> Int []
+    todo("qrcode-nv.qrversion.version_info_bits")
+
+// The fifteen-bit format information § 7.9 writes twice into every
+// symbol: the level and the mask, BCH(15,5) coded and masked with
+// 0x5412.
+//
+// ```novo
+// use qrmode
+// use qrversion
+//
+// fn main() [io]
+//     println("${qrversion.format_info_bits(QrEcMedium, 0)}")   // 0x5412 ^ ...
+// ```
+pub fn format_info_bits(ec: QrEcLevel, mask: Int) -> Int []
+    todo("qrcode-nv.qrversion.format_info_bits")

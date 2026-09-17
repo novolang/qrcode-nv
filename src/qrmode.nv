@@ -1,0 +1,432 @@
+// qrmode.nv — the four data modes, the four error-correction levels,
+// and a segment as a value.
+//
+// A MODE IS A CHARACTER SET WITH A PRICE
+//
+// ISO/IEC 18004 § 7.4 gives four ways to put data in a symbol, and the
+// difference between them is how many bits a character costs.  Numeric
+// mode packs three digits into ten bits.  Alphanumeric mode packs two
+// characters of a forty-five character set into eleven.  Byte mode
+// spends eight bits a byte.  Kanji mode spends thirteen bits on a
+// Shift JIS double byte that would cost sixteen in byte mode.
+//
+// So the mode is not a preference: it is the difference between a
+// telephone number in a version 1 symbol and the same number in a
+// version 3 one, and a library that always used byte mode would be
+// wrong by about two thirds on digits.
+//
+// A SEGMENT IS A VALUE, AND A MESSAGE IS A LIST OF THEM
+//
+// § 7.4.1 lets one symbol carry several segments in different modes,
+// one after another, each with its own mode indicator and character
+// count.  That is what makes `"HTTPS://EXAMPLE.COM/3141592"` cheap:
+// the letters go in alphanumeric mode and the digits in numeric mode,
+// and the switch costs the four bits of the second mode indicator plus
+// its character count.
+//
+// `plan` is the function that decides where the switches go.  It is
+// separate from the encoder so that a caller can look at the plan, and
+// so that a caller who KNOWS its data — a fixed-format ticket, a URL
+// scheme it wrote — can build the segment list itself and skip the
+// search.
+//
+// ECI IS A PREFIX, NOT A PROPERTY OF THE TEXT
+//
+// § 7.4.2 says an Extended Channel Interpretation designator changes
+// how the bytes that FOLLOW it are interpreted, and it stays in force
+// for the rest of the symbol.  So it is a segment, not a field on
+// another segment, and `eci_segment` is how one is written.  A reader
+// that does not understand ECI shows mojibake, which is why the
+// default is no designator at all and ISO-8859-1, the § 7.4.4
+// default.
+
+// A way of putting characters into a symbol.
+//
+// ```novo
+// use qrmode
+//
+// fn main() [io]
+//     println(qrmode.mode_name(QrNumeric))      // numeric
+// ```
+pub enum QrMode
+    // Digits `0` to `9`, three characters in ten bits (§ 7.4.3).
+    QrNumeric
+    // The forty-five characters of Table 5 — the digits, the
+    // upper-case letters, space, and `$%*+-./:` — two characters in
+    // eleven bits (§ 7.4.4).  Lower case is NOT in the set.
+    QrAlphanumeric
+    // Arbitrary bytes, eight bits each (§ 7.4.5).  Interpreted as
+    // ISO-8859-1 unless an ECI segment said otherwise.
+    QrByte
+    // Shift JIS double bytes, thirteen bits each (§ 7.4.6).  Two
+    // ranges only: 0x8140 to 0x9FFC and 0xE040 to 0xEBBF.
+    QrKanji
+
+// How much of the symbol is given over to recovering from damage.
+//
+// § 7.5 fixes the four levels, and the percentage is of the CODEWORDS
+// the decoder can restore, not of the area.  A higher level is a
+// larger symbol for the same data.
+//
+// ```novo
+// use qrmode
+//
+// fn main() [io]
+//     println("${qrmode.ec_recovery_percent(QrEcQuartile)}")   // 25
+// ```
+pub enum QrEcLevel
+    // Level L: about 7% of codewords recoverable.
+    QrEcLow
+    // Level M: about 15%.  What most generators default to.
+    QrEcMedium
+    // Level Q: about 25%.
+    QrEcQuartile
+    // Level H: about 30%.  The level a symbol printed on something
+    // that will be handled wants.
+    QrEcHigh
+
+// One run of data in one mode.
+//
+// Built by the four constructors below rather than by hand, because
+// each of them checks that the data is in the mode's character set and
+// answers `QrCharNotInMode` at the offending offset if it is not.  A
+// segment that exists is therefore a segment that can be encoded.
+pub struct QrSegment
+    // The mode this run is written in.
+    mode: QrMode
+    // The characters, as the caller gave them.  For `QrByte` this is
+    // the bytes; for the other three it is the text.
+    text: Str
+    // The bytes, for `QrByte` and `QrKanji`.  Empty otherwise.
+    data: [u8]
+    // How many characters the mode's character count field will
+    // report — digits for numeric, characters for alphanumeric, bytes
+    // for byte mode, double bytes for kanji.  NOT the length of
+    // `text`, which is why it is a field.
+    char_count: Int
+
+// An Extended Channel Interpretation designator, as a segment of its
+// own.
+//
+// It carries no data: it changes the interpretation of every byte
+// segment after it, to the end of the symbol.
+pub struct QrEci
+    // The assignment number, 0 to 999999.  26 is UTF-8, 3 is
+    // ISO-8859-1, 20 is Shift JIS (§ 7.4.2.3 and AIM ECI).
+    assignment: Int
+
+// The mode's name in lower case: `"numeric"`, `"alphanumeric"`,
+// `"byte"`, `"kanji"`.
+//
+// ```novo
+// use qrmode
+//
+// fn main() [io]
+//     println(qrmode.mode_name(QrAlphanumeric))  // alphanumeric
+// ```
+pub fn mode_name(m: QrMode) -> Str []
+    todo("qrcode-nv.qrmode.mode_name")
+
+// The four-bit mode indicator § 7.4.1 Table 2 gives this mode: 1, 2,
+// 4 and 8.
+//
+// ```novo
+// use qrmode
+//
+// fn main() [io]
+//     println("${qrmode.mode_indicator(QrByte)}")   // 4
+// ```
+pub fn mode_indicator(m: QrMode) -> Int []
+    todo("qrcode-nv.qrmode.mode_indicator")
+
+// The error-correction level's letter: `"L"`, `"M"`, `"Q"`, `"H"`.
+//
+// ```novo
+// use qrmode
+//
+// fn main() [io]
+//     println(qrmode.ec_name(QrEcHigh))         // H
+// ```
+pub fn ec_name(e: QrEcLevel) -> Str []
+    todo("qrcode-nv.qrmode.ec_name")
+
+// The level a letter names, or `None`.
+//
+// Case-insensitive, because the letter arrives from a command line or
+// a configuration file as often as from code.
+//
+// ```novo
+// use qrmode
+//
+// fn main() [io]
+//     match qrmode.ec_named("q")
+//         Some(_) => println("quartile")
+//         None    => println("not a level")
+// ```
+pub fn ec_named(letter: Str) -> ?QrEcLevel []
+    todo("qrcode-nv.qrmode.ec_named")
+
+// Roughly what fraction of the codewords this level can restore, as a
+// whole percentage: 7, 15, 25, 30.
+//
+// An approximation the standard itself states in § 7.5, useful for a
+// message to a user and never for arithmetic — the exact count is the
+// block plan's, and `qrversion.ec_codewords` is where it lives.
+//
+// ```novo
+// use qrmode
+//
+// fn main() [io]
+//     println("${qrmode.ec_recovery_percent(QrEcLow)}")    // 7
+// ```
+pub fn ec_recovery_percent(e: QrEcLevel) -> Int []
+    todo("qrcode-nv.qrmode.ec_recovery_percent")
+
+// The two-bit field § 7.9 Table 12 puts in the format information: 1,
+// 0, 3, 2 — which is NOT the order the levels are usually listed in,
+// and is the single most common place a hand-written encoder goes
+// wrong.
+//
+// ```novo
+// use qrmode
+//
+// fn main() [io]
+//     println("${qrmode.ec_format_bits(QrEcLow)}")         // 1
+//     println("${qrmode.ec_format_bits(QrEcMedium)}")      // 0
+// ```
+pub fn ec_format_bits(e: QrEcLevel) -> Int []
+    todo("qrcode-nv.qrmode.ec_format_bits")
+
+// Whether this byte is one of the ten digits numeric mode accepts.
+//
+// ```novo
+// use qrmode
+//
+// fn main() [io]
+//     println("${qrmode.is_numeric_char(57)}")   // true, '9'
+// ```
+pub fn is_numeric_char(byte: Int) -> Bool []
+    todo("qrcode-nv.qrmode.is_numeric_char")
+
+// Whether this byte is one of the forty-five characters of Table 5.
+//
+// Lower-case letters are not, which is why `plan` on a lower-case URL
+// answers byte mode and the same URL upper-cased is smaller.
+//
+// ```novo
+// use qrmode
+//
+// fn main() [io]
+//     println("${qrmode.is_alphanumeric_char(65)}")  // true, 'A'
+//     println("${qrmode.is_alphanumeric_char(97)}")  // false, 'a'
+// ```
+pub fn is_alphanumeric_char(byte: Int) -> Bool []
+    todo("qrcode-nv.qrmode.is_alphanumeric_char")
+
+// The value 0 to 44 Table 5 gives this character, or `-1`.
+//
+// The pairing arithmetic of § 7.4.4 is `first * 45 + second`, so this
+// is the function that arithmetic is built on.
+//
+// ```novo
+// use qrmode
+//
+// fn main() [io]
+//     println("${qrmode.alphanumeric_value(32)}")   // 36, the space
+// ```
+pub fn alphanumeric_value(byte: Int) -> Int []
+    todo("qrcode-nv.qrmode.alphanumeric_value")
+
+// Whether these two bytes are a Shift JIS double byte kanji mode can
+// carry.
+//
+// The two ranges of § 7.4.6 and nothing else: 0x8140 to 0x9FFC and
+// 0xE040 to 0xEBBF.  Single-byte Shift JIS — ASCII and half-width
+// katakana — is NOT kanji mode and belongs in byte mode.
+//
+// ```novo
+// use qrmode
+//
+// fn main() [io]
+//     println("${qrmode.is_shift_jis_pair(0x93, 0x5F)}")   // true
+// ```
+pub fn is_shift_jis_pair(high: Int, low: Int) -> Bool []
+    todo("qrcode-nv.qrmode.is_shift_jis_pair")
+
+// A numeric segment, or `QrCharNotInMode` at the first character that
+// is not a digit.
+//
+// ```novo
+// use qrmode
+//
+// fn main() [io]
+//     match qrmode.numeric_segment("8675309")
+//         Ok(s)  => println("${s.char_count}")   // 7
+//         Err(e) => println(e.message())
+// ```
+pub fn numeric_segment(text: Str) -> Result<QrSegment, QrFault> []
+    todo("qrcode-nv.qrmode.numeric_segment")
+
+// An alphanumeric segment, or `QrCharNotInMode` at the first character
+// outside Table 5.
+//
+// ```novo
+// use qrmode
+//
+// fn main() [io]
+//     match qrmode.alphanumeric_segment("HELLO WORLD")
+//         Ok(s)  => println("${s.char_count}")   // 11
+//         Err(e) => println(e.message())
+// ```
+pub fn alphanumeric_segment(text: Str) -> Result<QrSegment, QrFault> []
+    todo("qrcode-nv.qrmode.alphanumeric_segment")
+
+// A byte segment.  Never refuses: every byte is in byte mode's set.
+//
+// The bytes are carried as given.  This package does not transcode,
+// because a library that guessed at an encoding would be guessing at
+// what the decoder will assume, and `eci_segment` is the way to say it
+// instead.
+//
+// ```novo
+// use qrmode
+//
+// fn main() [io]
+//     // "café" as UTF-8: the é is two bytes, so this is five.
+//     let s = qrmode.byte_segment([99, 97, 102, 195, 169])
+//     println("${s.char_count}")                // 5
+// ```
+pub fn byte_segment(data: [u8]) -> QrSegment []
+    todo("qrcode-nv.qrmode.byte_segment")
+
+// A kanji segment, or `QrNotShiftJis` at the first pair that is not in
+// either range.
+//
+// Takes Shift JIS bytes, not UTF-8: transcoding is a table this
+// package does not carry, and the README says so under what is not
+// included.
+//
+// ```novo
+// use qrmode
+// use std.list
+//
+// fn main() [io]
+//     match qrmode.kanji_segment([147, 95])
+//         Ok(s)  => println("${s.char_count}")  // 1
+//         Err(e) => println(e.message())
+// ```
+pub fn kanji_segment(shift_jis: [u8]) -> Result<QrSegment, QrFault> []
+    todo("qrcode-nv.qrmode.kanji_segment")
+
+// An ECI designator, or `QrEciOutOfRange`.
+//
+// ```novo
+// use qrmode
+//
+// fn main() [io]
+//     match qrmode.eci_segment(26)              // UTF-8
+//         Ok(e)  => println("${e.assignment}")
+//         Err(e) => println(e.message())
+// ```
+pub fn eci_segment(assignment: Int) -> Result<QrEci, QrFault> []
+    todo("qrcode-nv.qrmode.eci_segment")
+
+// How many bits the ECI designator itself occupies: 12, 20 or 28,
+// depending on the assignment number's size (§ 7.4.2.2).
+//
+// ```novo
+// use qrmode
+//
+// fn main() [io]
+//     match qrmode.eci_segment(26)
+//         Ok(e)  => println("${qrmode.eci_bit_length(e)}")   // 12
+//         Err(_) => println("out of range")
+// ```
+pub fn eci_bit_length(e: QrEci) -> Int []
+    todo("qrcode-nv.qrmode.eci_bit_length")
+
+// How many bits the character count field takes for this mode at this
+// version (§ 7.4.1 Table 3).
+//
+// It changes at version 10 and again at version 27, which is why a
+// segment's cost cannot be known until the version is, and why
+// `qrversion.smallest_for` searches rather than computes.
+//
+// ```novo
+// use qrmode
+//
+// fn main() [io]
+//     println("${qrmode.char_count_bits(QrByte, 1)}")    // 8
+//     println("${qrmode.char_count_bits(QrByte, 10)}")   // 16
+// ```
+pub fn char_count_bits(m: QrMode, version: Int) -> Int []
+    todo("qrcode-nv.qrmode.char_count_bits")
+
+// How many bits this segment occupies at this version, mode indicator
+// and character count included.
+//
+// ```novo
+// use qrmode
+//
+// fn main() [io]
+//     match qrmode.numeric_segment("01234567")
+//         Ok(s)  => println("${qrmode.segment_bit_length(s, 1)}")   // 41
+//         Err(_) => println("not digits")
+// ```
+pub fn segment_bit_length(s: QrSegment, version: Int) -> Int []
+    todo("qrcode-nv.qrmode.segment_bit_length")
+
+// How many bits a whole segment list occupies at this version.
+//
+// ```novo
+// use qrmode
+//
+// fn main() [io]
+//     match qrmode.numeric_segment("8675309")
+//         Ok(s)  => println("${qrmode.total_bit_length([s], 1)}")
+//         Err(_) => println("not digits")
+// ```
+pub fn total_bit_length(segments: [QrSegment], version: Int) -> Int []
+    todo("qrcode-nv.qrmode.total_bit_length")
+
+// The cheapest mode that can hold this whole string on its own.
+//
+// Numeric if every character is a digit, alphanumeric if every
+// character is in Table 5, byte otherwise.  Never answers `QrKanji`:
+// kanji mode is over Shift JIS bytes and this takes text, so a caller
+// that wants it says so with `kanji_segment`.
+//
+// ```novo
+// use qrmode
+//
+// fn main() [io]
+//     println(qrmode.mode_name(qrmode.single_mode_for("8675309")))  // numeric
+//     println(qrmode.mode_name(qrmode.single_mode_for("café")))     // byte
+// ```
+pub fn single_mode_for(text: Str) -> QrMode []
+    todo("qrcode-nv.qrmode.single_mode_for")
+
+// The segment list that encodes this text in the fewest bits at this
+// version.
+//
+// THE FUNCTION THAT MAKES MIXED MODES WORTH HAVING.  It is a shortest
+// path over the three text modes, not a greedy scan: a run of four
+// digits inside a run of letters is cheaper left in alphanumeric mode
+// than switched twice, and the break-even depends on the version,
+// because the character count field is wider at version 10 and at
+// version 27.  ISO/IEC 18004 Annex J describes the same optimisation.
+//
+// The version is an argument because the answer depends on it, and
+// `qrcode.encode` calls this once per candidate version rather than
+// planning once and hoping.
+//
+// ```novo
+// use qrmode
+// use std.list
+//
+// fn main() [io]
+//     let plan = qrmode.plan("HTTPS://EXAMPLE.COM/3141592", 2)
+//     println("${list.len(plan)}")              // 2: alphanumeric, then numeric
+// ```
+pub fn plan(text: Str, version: Int) -> [QrSegment] []
+    todo("qrcode-nv.qrmode.plan")

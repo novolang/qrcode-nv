@@ -1,0 +1,439 @@
+// qrmatrix.nv — the symbol as a grid of light and dark modules, the
+// eight masks, and the penalty score that picks one.
+//
+// A MODULE IS DARK, LIGHT, OR NOT YET DECIDED
+//
+// Placing a symbol happens in a fixed order: the function patterns
+// first (§ 6.3), then the data (§ 7.7), then the format and version
+// information (§ 7.9, § 7.10).  Each stage has to know which modules
+// the earlier stages already own, because the data placement skips
+// them.  So a module in this package is one of three things and not a
+// boolean: dark, light, or free.  A grid of booleans would need a
+// second grid beside it saying which of the booleans meant anything,
+// and every QR implementation that starts with `[[bool]]` grows that
+// second grid within a day.
+//
+// `QrModule` is that three-state value, and `is_function` is what the
+// data placement and the masking both ask.
+//
+// THE MASK IS NOT A STYLE CHOICE
+//
+// § 7.8 defines eight mask patterns, each a formula over the module's
+// row and column, XORed into the data modules and not into the
+// function patterns.  The encoder tries all eight, scores each with
+// the four penalty rules of § 7.8.3.1, and keeps the lowest.  The
+// point is to avoid a symbol that looks like a finder pattern in the
+// middle of its own data, which is the failure a reader cannot recover
+// from.
+//
+// So `apply_mask` and `penalty_score` are public, and
+// `best_mask` is the one that does the eight trials.  They are public
+// because the penalty score is the part of the standard most often
+// implemented wrongly and it is worth being able to test a single
+// matrix against a known score.
+//
+// THE MATRIX DOES NOT CARRY ITS QUIET ZONE
+//
+// § 6.3 requires four light modules on every side and says nothing
+// about them beyond that.  They are not part of the symbol: they are
+// part of the drawing.  So `QrMatrix` is `side_modules` across, the
+// quiet zone lives in the render options, and a caller compositing a
+// symbol into a larger picture is never fighting an offset it did not
+// ask for.
+
+use qrversion
+
+// The four light modules ISO/IEC 18004 § 6.3 requires around a symbol.
+//
+// A symbol printed with less does not reliably scan, which is why
+// `qrrender` refuses a narrower one rather than drawing it.
+pub const QR_QUIET_ZONE = 4
+
+// What one cell of the grid is.
+//
+// ```novo
+// use qrmatrix
+//
+// fn main() [io]
+//     println("${qrmatrix.is_dark_module(QrDark)}")   // true
+// ```
+pub enum QrModule
+    // Not yet placed.  Only ever seen while a matrix is being built;
+    // a finished symbol has none.
+    QrFree
+    // A light module.  Drawn in the background colour.
+    QrLight
+    // A dark module.  Drawn in the foreground colour.
+    QrDark
+
+// One of the eight mask patterns of § 7.8.2, Table 10.
+//
+// Named by their number rather than by their formula, because the
+// number is what goes in the format information and what a reader
+// reports.
+//
+// ```novo
+// use qrmatrix
+//
+// fn main() [io]
+//     println("${qrmatrix.mask_number(QrMask3)}")     // 3
+// ```
+pub enum QrMask
+    // `(row + column) mod 2 == 0`.
+    QrMask0
+    // `row mod 2 == 0`.
+    QrMask1
+    // `column mod 3 == 0`.
+    QrMask2
+    // `(row + column) mod 3 == 0`.
+    QrMask3
+    // `((row / 2) + (column / 3)) mod 2 == 0`.
+    QrMask4
+    // `((row * column) mod 2) + ((row * column) mod 3) == 0`.
+    QrMask5
+    // `(((row * column) mod 2) + ((row * column) mod 3)) mod 2 == 0`.
+    QrMask6
+    // `(((row + column) mod 2) + ((row * column) mod 3)) mod 2 == 0`.
+    QrMask7
+
+// The four penalty rules of § 7.8.3.1, scored separately.
+//
+// Separately because they are separately wrong in every buggy
+// implementation, and a test that compares one total against a
+// reference cannot say which rule disagreed.
+//
+// ```novo
+// use qrmatrix
+//
+// fn main() [io]
+//     println("${qrmatrix.penalty_total(QrPenalty { adjacent: 0, blocks: 0, finder_like: 0, balance: 0 })}")   // 0
+// ```
+pub struct QrPenalty
+    // Rule 1: five or more same-coloured modules in a row or column,
+    // scoring `3 + (run - 5)` for each run.
+    adjacent: Int
+    // Rule 2: each two-by-two block of one colour, scoring 3.
+    blocks: Int
+    // Rule 3: each `1:1:3:1:1` finder-like pattern with four light
+    // modules on one side, scoring 40.
+    finder_like: Int
+    // Rule 4: how far the proportion of dark modules is from half,
+    // scoring 10 for each 5% of deviation.
+    balance: Int
+
+// A symbol as a grid.
+//
+// `side` modules across and the same down, with the quiet zone
+// excluded — the quiet zone is the drawing's, not the symbol's.
+pub struct QrMatrix
+    // The symbol's version, 1 to 40.
+    version: QrVersion
+    // The error-correction level written into its format information.
+    ec: QrEcLevel
+    // Which of the eight masks is applied, or `None` on a matrix that
+    // has not been masked yet.
+    mask: ?QrMask
+    // How many modules across, which is `4 * version + 17`.
+    side: Int
+    // The modules in row-major order, `side * side` of them.
+    modules: [QrModule]
+    // Which positions are function patterns and may not be masked or
+    // written by the data placement.  The same length as `modules`.
+    function: [Bool]
+
+// Whether a module is dark.
+//
+// `QrFree` is not dark, which is the answer that keeps a half-built
+// matrix from rendering as a picture full of holes.
+//
+// ```novo
+// use qrmatrix
+//
+// fn main() [io]
+//     println("${qrmatrix.is_dark_module(QrFree)}")   // false
+// ```
+pub fn is_dark_module(m: QrModule) -> Bool []
+    todo("qrcode-nv.qrmatrix.is_dark_module")
+
+// The mask's number, 0 to 7.
+//
+// ```novo
+// use qrmatrix
+//
+// fn main() [io]
+//     println("${qrmatrix.mask_number(QrMask0)}")     // 0
+// ```
+pub fn mask_number(m: QrMask) -> Int []
+    todo("qrcode-nv.qrmatrix.mask_number")
+
+// The mask a number names, or `QrMaskOutOfRange`.
+//
+// ```novo
+// use qrmatrix
+//
+// fn main() [io]
+//     match qrmatrix.mask_numbered(8)
+//         Ok(_)  => println("this cannot happen")
+//         Err(e) => println(e.message())
+// ```
+pub fn mask_numbered(n: Int) -> Result<QrMask, QrFault> []
+    todo("qrcode-nv.qrmatrix.mask_numbered")
+
+// Whether the mask's formula darkens this position.
+//
+// The formulas of Table 10, and nothing else: it does not ask whether
+// the position is a function pattern, because `apply_mask` is where
+// that belongs and separating the two is what makes this testable
+// against the table.
+//
+// ```novo
+// use qrmatrix
+//
+// fn main() [io]
+//     println("${qrmatrix.mask_covers(QrMask0, 0, 0)}")   // true
+//     println("${qrmatrix.mask_covers(QrMask0, 0, 1)}")   // false
+// ```
+pub fn mask_covers(m: QrMask, row: Int, column: Int) -> Bool []
+    todo("qrcode-nv.qrmatrix.mask_covers")
+
+// An empty matrix of this version: every module `QrFree`, nothing
+// placed.
+//
+// ```novo
+// use qrmode
+// use qrversion
+// use qrmatrix
+//
+// fn main() [io]
+//     match qrversion.version(1)
+//         Ok(v)  => println("${qrmatrix.blank(v, QrEcLow).side}")   // 21
+//         Err(_) => println("out of range")
+// ```
+pub fn blank(v: QrVersion, ec: QrEcLevel) -> QrMatrix []
+    todo("qrcode-nv.qrmatrix.blank")
+
+// The same matrix with the function patterns placed: the three finder
+// patterns and their separators, the two timing patterns, the
+// alignment patterns, and the dark module of § 6.3.6.
+//
+// The format and version information areas are marked as function
+// modules here but not written, because their contents depend on the
+// mask and the mask is not chosen yet.
+//
+// ```novo
+// use qrmode
+// use qrversion
+// use qrmatrix
+//
+// fn main() [io]
+//     match qrversion.version(1)
+//         Ok(v)  =>
+//             let m = qrmatrix.with_function_patterns(qrmatrix.blank(v, QrEcLow))
+//             println("${qrmatrix.is_function(m, 0, 0)}")   // true
+//         Err(_) => println("out of range")
+// ```
+pub fn with_function_patterns(m: QrMatrix) -> QrMatrix []
+    todo("qrcode-nv.qrmatrix.with_function_patterns")
+
+// The module at a position.  `QrLight` outside the grid, so a
+// renderer's edge arithmetic cannot panic.
+//
+// ```novo
+// use qrmode
+// use qrversion
+// use qrmatrix
+//
+// fn main() [io]
+//     match qrversion.version(1)
+//         Ok(v)  => println("${qrmatrix.is_dark_module(qrmatrix.module_at(qrmatrix.blank(v, QrEcLow), 99, 99))}")
+//         Err(_) => println("out of range")
+// ```
+pub fn module_at(m: QrMatrix, row: Int, column: Int) -> QrModule []
+    todo("qrcode-nv.qrmatrix.module_at")
+
+// Whether a position is dark.  The one function a renderer needs.
+//
+// ```novo
+// use qrmode
+// use qrversion
+// use qrmatrix
+//
+// fn main() [io]
+//     match qrversion.version(1)
+//         Ok(v)  => println("${qrmatrix.is_dark(qrmatrix.blank(v, QrEcLow), 0, 0)}")
+//         Err(_) => println("out of range")
+// ```
+pub fn is_dark(m: QrMatrix, row: Int, column: Int) -> Bool []
+    todo("qrcode-nv.qrmatrix.is_dark")
+
+// Whether a position belongs to a function pattern, the format
+// information or the version information.
+//
+// True outside the grid as well, so that a walk which runs off the
+// edge skips rather than writes.
+//
+// ```novo
+// use qrmode
+// use qrversion
+// use qrmatrix
+//
+// fn main() [io]
+//     match qrversion.version(1)
+//         Ok(v)  => println("${qrmatrix.is_function(qrmatrix.blank(v, QrEcLow), 99, 99)}")   // true
+//         Err(_) => println("out of range")
+// ```
+pub fn is_function(m: QrMatrix, row: Int, column: Int) -> Bool []
+    todo("qrcode-nv.qrmatrix.is_function")
+
+// The same matrix with one module set.  Refuses nothing: a write
+// outside the grid is dropped.
+//
+// ```novo
+// use qrmode
+// use qrversion
+// use qrmatrix
+//
+// fn main() [io]
+//     match qrversion.version(1)
+//         Ok(v)  =>
+//             let m = qrmatrix.set_module(qrmatrix.blank(v, QrEcLow), 10, 10, QrDark)
+//             println("${qrmatrix.is_dark(m, 10, 10)}")   // true
+//         Err(_) => println("out of range")
+// ```
+pub fn set_module(m: QrMatrix, row: Int, column: Int, value: QrModule) -> QrMatrix []
+    todo("qrcode-nv.qrmatrix.set_module")
+
+// The order the data codeword bits are written in: the two-module-wide
+// upward-then-downward zigzag of § 7.7.3, function modules skipped.
+//
+// Answered as a list of `(row, column)` pairs, `side * side` minus the
+// function modules long.  It is public because it is the placement
+// rule, and a caller checking an implementation against the standard's
+// own Figure 21 wants to see it rather than infer it.
+//
+// ```novo
+// use std.list
+// use qrmode
+// use qrversion
+// use qrmatrix
+//
+// fn main() [io]
+//     match qrversion.version(1)
+//         Ok(v)  =>
+//             let m = qrmatrix.with_function_patterns(qrmatrix.blank(v, QrEcLow))
+//             println("${list.len(qrmatrix.placement_order(m))}")   // 208
+//         Err(_) => println("out of range")
+// ```
+pub fn placement_order(m: QrMatrix) -> [(Int, Int)] []
+    todo("qrcode-nv.qrmatrix.placement_order")
+
+// The same matrix with a codeword stream written into the data
+// positions, most significant bit first.
+//
+// ```novo
+// use std.list
+// use qrmode
+// use qrversion
+// use qrmatrix
+//
+// fn main() [io]
+//     match qrversion.version(1)
+//         Ok(v)  =>
+//             let m = qrmatrix.with_function_patterns(qrmatrix.blank(v, QrEcLow))
+//             println("${qrmatrix.place_codewords(m, list.zeros(26)).side}")   // 21
+//         Err(_) => println("out of range")
+// ```
+pub fn place_codewords(m: QrMatrix, codewords: [u8]) -> QrMatrix []
+    todo("qrcode-nv.qrmatrix.place_codewords")
+
+// The same matrix with one mask XORed into its data modules and its
+// format information written for that mask.
+//
+// The function modules are untouched, which is the whole of § 7.8.1.
+//
+// ```novo
+// use qrmode
+// use qrversion
+// use qrmatrix
+//
+// fn main() [io]
+//     match qrversion.version(1)
+//         Ok(v)  =>
+//             let m = qrmatrix.with_function_patterns(qrmatrix.blank(v, QrEcLow))
+//             match qrmatrix.apply_mask(m, QrMask2).mask
+//                 Some(k) => println("${qrmatrix.mask_number(k)}")   // 2
+//                 None    => println("not masked")
+//         Err(_) => println("out of range")
+// ```
+pub fn apply_mask(m: QrMatrix, mask: QrMask) -> QrMatrix []
+    todo("qrcode-nv.qrmatrix.apply_mask")
+
+// The four penalty rules of § 7.8.3.1, scored separately.
+//
+// ```novo
+// use qrmode
+// use qrversion
+// use qrmatrix
+//
+// fn main() [io]
+//     match qrversion.version(1)
+//         Ok(v)  =>
+//             let m = qrmatrix.apply_mask(
+//                         qrmatrix.with_function_patterns(qrmatrix.blank(v, QrEcLow)), QrMask0)
+//             println("${qrmatrix.penalty_score(m).blocks}")
+//         Err(_) => println("out of range")
+// ```
+pub fn penalty_score(m: QrMatrix) -> QrPenalty []
+    todo("qrcode-nv.qrmatrix.penalty_score")
+
+// The four rules added together — the number the eight trials compare.
+//
+// ```novo
+// use qrmatrix
+//
+// fn main() [io]
+//     println("${qrmatrix.penalty_total(QrPenalty { adjacent: 3, blocks: 9, finder_like: 40, balance: 10 })}")   // 62
+// ```
+pub fn penalty_total(p: QrPenalty) -> Int []
+    todo("qrcode-nv.qrmatrix.penalty_total")
+
+// The mask with the lowest total penalty, ties going to the lower
+// number.
+//
+// The eight trials of § 7.8.3, and the reason `qrcode.encode` costs
+// eight maskings rather than one.  Ties go to the lower number because
+// the standard does not say and every reference implementation does
+// the same, so two encoders agree on the byte.
+//
+// ```novo
+// use qrmode
+// use qrversion
+// use qrmatrix
+//
+// fn main() [io]
+//     match qrversion.version(1)
+//         Ok(v)  =>
+//             let m = qrmatrix.with_function_patterns(qrmatrix.blank(v, QrEcLow))
+//             println("${qrmatrix.mask_number(qrmatrix.best_mask(m))}")
+//         Err(_) => println("out of range")
+// ```
+pub fn best_mask(m: QrMatrix) -> QrMask []
+    todo("qrcode-nv.qrmatrix.best_mask")
+
+// How many modules of the symbol are dark.
+//
+// What penalty rule 4 is computed from, and what a print-quality check
+// looks at.
+//
+// ```novo
+// use qrmode
+// use qrversion
+// use qrmatrix
+//
+// fn main() [io]
+//     match qrversion.version(1)
+//         Ok(v)  => println("${qrmatrix.dark_count(qrmatrix.blank(v, QrEcLow))}")   // 0
+//         Err(_) => println("out of range")
+// ```
+pub fn dark_count(m: QrMatrix) -> Int []
+    todo("qrcode-nv.qrmatrix.dark_count")

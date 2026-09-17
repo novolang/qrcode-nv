@@ -1,0 +1,130 @@
+// qrfault.nv — every way a symbol can fail to be produced, and the
+// number the caller needs to fix it.
+//
+// A REFUSAL CARRIES THE NUMBER THAT WOULD MAKE IT SUCCEED
+//
+// The refusals an encoder hands back are nearly all about capacity,
+// and "data too long" on its own tells a caller nothing it can act
+// on.  What a caller can act on is the pair: how many bits the data
+// needs, and how many bits the symbol it asked for holds.  With both
+// it can drop an error-correction level, raise the version, split the
+// payload, or tell its own user how much to cut.  So every capacity
+// refusal here carries both numbers, and `QrDataTooLong` is the one
+// that also names the largest version, because a caller that pinned a
+// version usually did not mean to.
+//
+// THE CHARACTER REFUSALS CARRY AN OFFSET
+//
+// A mode is a character set.  Numeric mode holds ten characters,
+// alphanumeric mode forty-five (ISO/IEC 18004 § 7.4.4, Table 5), and a
+// caller that names a mode for text that does not fit it has a bug in
+// one specific place.  The offset is the byte index into the caller's
+// own string, so the message can quote the character rather than the
+// whole input.
+
+// Why a symbol could not be produced.
+//
+// ```novo
+// use qrfault
+//
+// fn main() [io]
+//     println(QrDataTooLong(1400, 1056, 40).message())
+// ```
+pub enum QrFault
+    // The data needs more bits than the largest permitted version
+    // holds at this error-correction level.  `bits_needed` counts the
+    // mode indicators, the character counts and the data, exactly as
+    // ISO/IEC 18004 § 7.4.1 defines the bit stream; `bits_available`
+    // is the data capacity of `largest_version`.
+    QrDataTooLong(bits_needed: Int, bits_available: Int, largest_version: Int)
+    // The data does not fit the version the caller PINNED, though a
+    // larger one would hold it.  Separate from `QrDataTooLong` because
+    // the fix is different: raise the pin, or stop pinning.
+    QrVersionTooSmall(bits_needed: Int, bits_available: Int, version: Int)
+    // A version number outside 1 to 40 (§ 6.1).
+    QrVersionOutOfRange(given: Int)
+    // A mask number outside 0 to 7 (§ 7.8.2, Table 10).
+    QrMaskOutOfRange(given: Int)
+    // A character at this byte offset is not in the named mode's
+    // character set.  `mode` is `"numeric"`, `"alphanumeric"`,
+    // `"byte"` or `"kanji"`.
+    QrCharNotInMode(offset: Int, mode: Str)
+    // Kanji mode is declared but the bytes at this offset are not a
+    // Shift JIS double byte in either of the two ranges § 7.4.6
+    // permits.
+    QrNotShiftJis(offset: Int)
+    // An ECI assignment number outside the 0 to 999999 that § 7.4.2.3
+    // allows.
+    QrEciOutOfRange(assignment: Int)
+    // A quiet zone narrower than the four modules § 6.3 requires, or
+    // negative.  Carried rather than clamped, because a caller that
+    // asked for two modules wants to know the symbol will not scan.
+    QrQuietZoneTooNarrow(given: Int, required: Int)
+    // A render scale of zero or less.  A symbol drawn at scale zero is
+    // an empty picture, which is worse than a refusal.
+    QrScaleNotPositive(given: Int)
+    // The segment list is empty.  § 7.4.1 has no encoding for a symbol
+    // with no data segments, and a caller that reached here usually
+    // filtered a list down to nothing by accident.
+    QrNoSegments
+    // The structured-append sequence is longer than the sixteen
+    // symbols § 8 allows, or a symbol index falls outside it.
+    QrSequenceOutOfRange(index: Int, total: Int)
+
+// `QrFault` is an `Error`, which is what lets `Result<T, QrFault>`
+// exist at all.
+impl Error for QrFault
+    // The one-line message, naming the numbers the caller needs.
+    //
+    // Panics with `not implemented` until the bodies land.
+    fn message(self) -> Str
+        todo("qrcode-nv.QrFault.message")
+
+// A short stable code for logs and metrics: `"data_too_long"`,
+// `"char_not_in_mode"`, `"version_out_of_range"`, and so on.
+//
+// Free of anything the caller's data carried, so it is safe as a
+// metric label.
+//
+// ```novo
+// use qrfault
+//
+// fn main() [io]
+//     println(qrfault.code(QrNoSegments))       // no_segments
+// ```
+pub fn code(f: QrFault) -> Str []
+    todo("qrcode-nv.qrfault.code")
+
+// How many more bits the symbol would have had to hold, or `0` when
+// the refusal was not about capacity.
+//
+// The number a caller writes into "shorten this by N bits" or feeds
+// into a retry at a lower error-correction level.
+//
+// ```novo
+// use qrfault
+//
+// fn main() [io]
+//     println("${qrfault.shortfall_bits(QrDataTooLong(1400, 1056, 40))}")   // 344
+// ```
+pub fn shortfall_bits(f: QrFault) -> Int []
+    todo("qrcode-nv.qrfault.shortfall_bits")
+
+// Whether a larger version or a weaker error-correction level could
+// have encoded this data.
+//
+// True for `QrVersionTooSmall`, false for `QrDataTooLong` — the first
+// is a pin the caller chose and can raise, the second is the end of
+// the format.  A caller retrying automatically asks this before it
+// tries again, so that a hopeless retry loop cannot be written by
+// accident.
+//
+// ```novo
+// use qrfault
+//
+// fn main() [io]
+//     println("${qrfault.is_retryable(QrVersionTooSmall(300, 208, 5))}")    // true
+//     println("${qrfault.is_retryable(QrDataTooLong(30000, 23648, 40))}")   // false
+// ```
+pub fn is_retryable(f: QrFault) -> Bool []
+    todo("qrcode-nv.qrfault.is_retryable")

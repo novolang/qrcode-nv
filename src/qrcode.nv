@@ -1,0 +1,311 @@
+// qrcode.nv — the encoder: text in, a finished matrix out.
+//
+// THE SHORT WAY AND THE LONG WAY
+//
+// `encode` takes a string and an error-correction level and answers a
+// matrix.  It plans the segments, finds the smallest version, builds
+// the bit stream, computes the Reed-Solomon blocks, interleaves them,
+// places them, tries the eight masks and keeps the best.  That is the
+// whole of ISO/IEC 18004 § 7 in one call, and it is what most callers
+// want.
+//
+// `encode_segments` takes a segment list the caller built and a
+// `QrOptions` that pins what it wants pinned.  It is the same
+// pipeline with the decisions handed in: a caller that knows its data
+// is a fixed-format ticket, or that must produce byte-identical
+// symbols to another system, uses this.
+//
+// The stages between them are public too — `data_bit_stream`,
+// `error_correction_blocks`, `interleave` — because each is a place
+// two implementations disagree and each has published test vectors.
+// ISO/IEC 18004 Annex I works one symbol end to end, and a suite that
+// can only assert on the finished matrix cannot say which stage was
+// wrong.
+//
+// WHAT IS NOT HERE
+//
+// Decoding.  Reading a symbol is a different program: a binariser, a
+// perspective transform, a finder-pattern search and Reed-Solomon
+// ERASURE decoding, none of which shares code with encoding.  It is
+// named in the README as a later release rather than left to be
+// discovered.
+//
+// Micro QR (ISO/IEC 18004 § 8 and Annex).  A different symbol with its
+// own versions, its own format information and its own mask set.  Also
+// a later release.
+
+use qrmode
+use qrversion
+use qrmatrix
+
+// What a caller pins, when it pins anything.
+//
+// A VALUE RATHER THAN SEVEN OPTIONAL ARGUMENTS, because the
+// combination is what is interesting: a service that must produce the
+// same symbol as a system it is replacing pins the version, the mask
+// and the level together and names the value once.
+pub struct QrOptions
+    // How much error correction.
+    ec: QrEcLevel
+    // The smallest version to consider, 1 to 40.
+    min_version: Int
+    // The largest version to consider, 1 to 40.  Pinning both to the
+    // same number pins the version.
+    max_version: Int
+    // A mask to use instead of the eight trials, or `None` to score
+    // them.  Pinning it is how a caller reproduces another encoder's
+    // output byte for byte.
+    mask: ?QrMask
+    // An ECI designator to write before the data, or `None` for the
+    // § 7.4.4 default interpretation of ISO-8859-1.
+    eci: ?QrEci
+
+// The ordinary options: medium error correction, any version, the
+// mask chosen by penalty score, no ECI.
+//
+// ```novo
+// use qrmode
+// use qrcode
+//
+// fn main() [io]
+//     println(qrmode.ec_name(qrcode.default_options().ec))   // M
+// ```
+pub fn default_options() -> QrOptions []
+    todo("qrcode-nv.qrcode.default_options")
+
+// The same options with a different error-correction level.
+//
+// ```novo
+// use qrmode
+// use qrcode
+//
+// fn main() [io]
+//     let o = qrcode.with_ec(qrcode.default_options(), QrEcHigh)
+//     println(qrmode.ec_name(o.ec))             // H
+// ```
+pub fn with_ec(o: QrOptions, ec: QrEcLevel) -> QrOptions []
+    todo("qrcode-nv.qrcode.with_ec")
+
+// The same options with the version pinned to exactly one number.
+//
+// Sets both bounds, so a payload that does not fit is
+// `QrVersionTooSmall` rather than a silently larger symbol.
+//
+// ```novo
+// use qrcode
+//
+// fn main() [io]
+//     let o = qrcode.with_version(qrcode.default_options(), 5)
+//     println("${o.min_version} ${o.max_version}")   // 5 5
+// ```
+pub fn with_version(o: QrOptions, version: Int) -> QrOptions []
+    todo("qrcode-nv.qrcode.with_version")
+
+// The same options with a version range.
+//
+// ```novo
+// use qrcode
+//
+// fn main() [io]
+//     let o = qrcode.with_version_range(qrcode.default_options(), 4, 10)
+//     println("${o.max_version}")               // 10
+// ```
+pub fn with_version_range(o: QrOptions, min: Int, max: Int) -> QrOptions []
+    todo("qrcode-nv.qrcode.with_version_range")
+
+// The same options with the mask pinned, skipping the eight trials.
+//
+// ```novo
+// use qrmatrix
+// use qrcode
+//
+// fn main() [io]
+//     let o = qrcode.with_mask(qrcode.default_options(), QrMask4)
+//     match o.mask
+//         Some(m) => println("${qrmatrix.mask_number(m)}")   // 4
+//         None    => println("not pinned")
+// ```
+pub fn with_mask(o: QrOptions, mask: QrMask) -> QrOptions []
+    todo("qrcode-nv.qrcode.with_mask")
+
+// The same options with an ECI designator written before the data.
+//
+// 26 is UTF-8, which is what a caller putting non-Latin text in byte
+// mode almost always means.  Without it, § 7.4.4 says the bytes are
+// ISO-8859-1 and a reader is entitled to show mojibake.
+//
+// ```novo
+// use qrmode
+// use qrcode
+//
+// fn main() [io]
+//     match qrmode.eci_segment(26)
+//         Ok(e)  => println("${qrcode.with_eci(qrcode.default_options(), e).min_version}")
+//         Err(_) => println("out of range")
+// ```
+pub fn with_eci(o: QrOptions, eci: QrEci) -> QrOptions []
+    todo("qrcode-nv.qrcode.with_eci")
+
+// A finished symbol for this text at this error-correction level.
+//
+// The whole pipeline: plan, size, encode, block, interleave, place,
+// mask.  The version is the smallest that holds the data and the mask
+// is the one with the lowest penalty score.
+//
+// ```novo
+// use qrmode
+// use qrcode
+// use qrmatrix
+//
+// fn main() [io]
+//     match qrcode.encode("HELLO WORLD", QrEcQuartile)
+//         Ok(m)  => println("${m.side}")        // 21 — version 1
+//         Err(e) => println(e.message())
+// ```
+pub fn encode(text: Str, ec: QrEcLevel) -> Result<QrMatrix, QrFault> []
+    todo("qrcode-nv.qrcode.encode")
+
+// A finished symbol for this text under options the caller chose.
+//
+// ```novo
+// use qrcode
+//
+// fn main() [io]
+//     let o = qrcode.with_version(qrcode.default_options(), 5)
+//     match qrcode.encode_with("HELLO WORLD", o)
+//         Ok(m)  => println("${m.side}")        // 37
+//         Err(e) => println(e.message())
+// ```
+pub fn encode_with(text: Str, o: QrOptions) -> Result<QrMatrix, QrFault> []
+    todo("qrcode-nv.qrcode.encode_with")
+
+// A finished symbol for a segment list the caller built.
+//
+// The entry point for a caller that knows its data's shape and does
+// not want the planner's search, and the one that can write kanji
+// mode, which `encode` never chooses on its own.
+//
+// ```novo
+// use qrmode
+// use qrcode
+//
+// fn main() [io]
+//     match qrmode.numeric_segment("8675309")
+//         Err(e) => println(e.message())
+//         Ok(s)  =>
+//             match qrcode.encode_segments([s], qrcode.default_options())
+//                 Ok(m)  => println("${m.side}")   // 21
+//                 Err(e) => println(e.message())
+// ```
+pub fn encode_segments(segments: [QrSegment], o: QrOptions) -> Result<QrMatrix, QrFault> []
+    todo("qrcode-nv.qrcode.encode_segments")
+
+// Only the bit stream of § 7.4: mode indicators, character counts,
+// data, the terminator of § 7.4.9, the pad to a byte boundary, and the
+// alternating `0xEC 0x11` pad codewords of § 7.4.10.
+//
+// Answered as data codewords, `qrversion.data_codewords` of them.  A
+// stage rather than an internal step, because Annex I publishes this
+// intermediate value and a suite that can assert on it finds a bug in
+// the terminator without also having to be right about Reed-Solomon.
+//
+// ```novo
+// use std.list
+// use qrmode
+// use qrversion
+// use qrcode
+//
+// fn main() [io]
+//     match qrversion.version(1)
+//         Err(_) => println("out of range")
+//         Ok(v)  =>
+//             match qrmode.numeric_segment("01234567")
+//                 Err(e) => println(e.message())
+//                 Ok(s)  =>
+//                     match qrcode.data_bit_stream([s], v, QrEcMedium)
+//                         Ok(cw) => println("${list.len(cw)}")   // 16
+//                         Err(e) => println(e.message())
+// ```
+pub fn data_bit_stream(segments: [QrSegment], v: QrVersion,
+                       ec: QrEcLevel) -> Result<[u8], QrFault> []
+    todo("qrcode-nv.qrcode.data_bit_stream")
+
+// The error-correction codewords for one block: the remainder of the
+// data polynomial divided by the generator polynomial of degree
+// `ec_count`, over GF(256) with the primitive polynomial 0x11D
+// (§ 7.5.2).
+//
+// ```novo
+// use std.list
+// use qrcode
+//
+// fn main() [io]
+//     println("${list.len(qrcode.block_ec(list.zeros(19), 7))}")   // 7
+// ```
+pub fn block_ec(data: [u8], ec_count: Int) -> [u8] []
+    todo("qrcode-nv.qrcode.block_ec")
+
+// The data codewords cut into the version's blocks, each with its
+// error-correction codewords computed.
+//
+// Answered as one list per block, data first and then error
+// correction, in the order § 7.6 interleaves them.
+//
+// ```novo
+// use std.list
+// use qrmode
+// use qrversion
+// use qrcode
+//
+// fn main() [io]
+//     match qrversion.version(5)
+//         Ok(v)  => println("${list.len(qrcode.error_correction_blocks(list.zeros(64), v, QrEcQuartile))}")   // 4
+//         Err(_) => println("out of range")
+// ```
+pub fn error_correction_blocks(data: [u8], v: QrVersion, ec: QrEcLevel) -> [[u8]] []
+    todo("qrcode-nv.qrcode.error_correction_blocks")
+
+// The blocks interleaved into the final codeword sequence of § 7.6:
+// the first data codeword of every block, then the second of every
+// block, and so on, then the same over the error-correction
+// codewords.
+//
+// The stage that makes a symbol survive a smudge: damage to one
+// region of the picture is spread across every block, and each block
+// can lose up to its own correction capacity.
+//
+// ```novo
+// use std.list
+// use qrcode
+//
+// fn main() [io]
+//     println("${list.len(qrcode.interleave([[1, 2], [3, 4]], 1))}")   // 4
+// ```
+pub fn interleave(blocks: [[u8]], data_per_block: Int) -> [u8] []
+    todo("qrcode-nv.qrcode.interleave")
+
+// How many bits this text would occupy at this version, planner
+// included — the number to compare against `qrversion.data_bits`.
+//
+// What a caller sizing a field asks before it builds anything.
+//
+// ```novo
+// use qrcode
+//
+// fn main() [io]
+//     println("${qrcode.bit_length_of("HELLO WORLD", 1)}")
+// ```
+pub fn bit_length_of(text: Str, version: Int) -> Int []
+    todo("qrcode-nv.qrcode.bit_length_of")
+
+// Whether this text fits a symbol of this version at this level.
+//
+// ```novo
+// use qrmode
+// use qrcode
+//
+// fn main() [io]
+//     println("${qrcode.fits("HELLO WORLD", 1, QrEcQuartile)}")   // true
+// ```
+pub fn fits(text: Str, version: Int, ec: QrEcLevel) -> Bool []
+    todo("qrcode-nv.qrcode.fits")

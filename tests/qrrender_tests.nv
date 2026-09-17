@@ -1,0 +1,176 @@
+// qrrender_tests.nv — drawing a symbol as text, as SVG and as a
+// pixel mask, against ISO/IEC 18004 § 6.2 and § 6.3.
+//
+// RED ON PURPOSE: every body under `src/` is a `todo()`, so every
+// assertion here reaches `not implemented: qrcode-nv.qrrender.<fn>`.
+
+use std.test
+use std.list
+use std.str
+use srgb
+use svgdoc
+use svgpath
+use qrfault
+use qrversion
+use qrmatrix
+use qrcode
+use qrrender
+
+fn v(n: Int) -> QrVersion
+    qrversion.version(n)!
+
+fn symbol() -> QrMatrix
+    qrcode.encode("HELLO WORLD", QrEcQuartile)!
+
+@test
+fn test_the_default_style_is_the_one_that_scans() [io]
+    let s = qrrender.default_style()
+
+    test.case("four modules of quiet zone, one pixel a module")
+    test.assert(s.quiet == 4)
+    test.assert(s.scale == 1)
+
+    test.case("black on white — § 6.2 wants the dark modules darker")
+    test.assert(s.dark.a == 255)
+    test.assert(s.light.a == 255)
+
+    test.case("and it is scannable by its own predicate")
+    test.assert(qrrender.style_is_scannable(s))
+
+@test
+fn test_each_style_builder_sets_one_thing() [io]
+    test.case("the scale")
+    test.assert(qrrender.with_scale(qrrender.default_style(), 8).scale == 8)
+
+    test.case("the quiet zone")
+    test.assert(qrrender.with_quiet(qrrender.default_style(), 6).quiet == 6)
+
+    test.case("the two colours, in color-nv's own type")
+    let tinted = qrrender.with_colors(qrrender.default_style(),
+                                      srgb.opaque(srgb.rgb8(0, 32, 96)),
+                                      srgb.opaque(srgb.white()))
+    test.assert(tinted.dark.rgb.b == 96)
+    test.assert(tinted.light.rgb.r == 255)
+
+@test
+fn test_a_style_that_would_not_scan_says_so_rather_than_being_corrected() [io]
+    // § 6.3 requires four light modules on every side.  A caller that
+    // chose two to fit a layout needs to know the symbol will fail in
+    // the field, not on the screen.
+    test.case("a narrow quiet zone is not scannable")
+    test.assert(not qrrender.style_is_scannable(
+                    qrrender.with_quiet(qrrender.default_style(), 2)))
+
+    test.case("nor is a zero scale")
+    test.assert(not qrrender.style_is_scannable(
+                    qrrender.with_scale(qrrender.default_style(), 0)))
+
+    test.case("nor is reverse video — § 6.2 wants the dark modules darker")
+    test.assert(not qrrender.style_is_scannable(
+                    qrrender.with_colors(qrrender.default_style(),
+                                         srgb.opaque(srgb.white()),
+                                         srgb.opaque(srgb.black()))))
+
+@test
+fn test_the_drawn_size_includes_the_quiet_zone() [io]
+    let m = qrmatrix.blank(v(1), QrEcLow)
+
+    test.case("21 modules plus four each side, at one pixel a module")
+    test.assert(qrrender.pixel_size(m, qrrender.default_style()) == 29)
+
+    test.case("and the scale multiplies the whole thing")
+    test.assert(qrrender.pixel_size(m, qrrender.with_scale(qrrender.default_style(), 4))
+                == 116)
+
+@test
+fn test_the_text_rendering_is_square_and_carries_its_quiet_zone() [io]
+    test.case("half blocks put two module rows on one line")
+    // 21 modules plus eight of quiet zone is 29 rows, which is 15
+    // lines of half blocks.
+    match qrrender.to_text(symbol(), qrrender.default_style())
+        Err(e)    => test.fail(e.message())
+        Ok(lines) => test.assert(list.len(lines) == 15)
+
+    test.case("one character per module gives a line per row")
+    match qrrender.to_text_full(symbol(), qrrender.default_style(), "##", "  ")
+        Err(e)    => test.fail(e.message())
+        Ok(lines) =>
+            test.assert(list.len(lines) == 29)
+            test.assert(str.len(list.get(lines, 0)) == 58)
+
+    test.case("and a style that would not scan is refused, not drawn")
+    match qrrender.to_text(symbol(), qrrender.with_quiet(qrrender.default_style(), 1))
+        Ok(_)  => test.fail("one module of quiet zone does not scan")
+        Err(e) => test.assert(qrfault.code(e) == "quiet_zone_too_narrow")
+
+@test
+fn test_the_svg_is_one_path_and_not_fifteen_thousand_rectangles() [io]
+    test.case("the path exists and has commands")
+    match qrrender.to_svg_path(symbol(), qrrender.default_style())
+        Err(e) => test.fail(e.message())
+        Ok(p)  => test.assert(svgpath.command_count(p) > 0)
+
+    test.case("horizontal runs are merged, so there are fewer subpaths than dark modules")
+    match qrrender.to_svg_path(symbol(), qrrender.default_style())
+        Err(e) => test.fail(e.message())
+        Ok(p)  => test.assert(svgpath.subpath_count(p)
+                              <= qrmatrix.dark_count(symbol()))
+
+    test.case("the node is a leaf — one path, one fill")
+    match qrrender.to_svg_node(symbol(), qrrender.default_style())
+        Err(e) => test.fail(e.message())
+        Ok(n)  => test.assert(svgdoc.is_leaf(n))
+
+    test.case("the document draws the background as well as the modules")
+    // § 6.3 is about LIGHT modules, so a transparent quiet zone over a
+    // dark page is a symbol that does not scan.
+    match qrrender.to_svg(symbol(), qrrender.default_style())
+        Err(e) => test.fail(e.message())
+        Ok(d)  => test.assert(svgdoc.child_count_of(d) == 2)
+
+    test.case("and the one-line path answers text")
+    match qrrender.to_svg_string(symbol(), qrrender.with_scale(qrrender.default_style(), 8))
+        Err(e)   => test.fail(e.message())
+        Ok(text) =>
+            test.assert(str.len(text) > 0)
+            test.assert(str.contains(text, "<svg"))
+
+@test
+fn test_the_raster_is_a_mask_and_not_a_picture() [io]
+    // One byte a pixel, 1 dark and 0 light, so the two colours stay in
+    // the caller's palette rather than being smeared into every pixel.
+    test.case("the buffer is the drawn size squared")
+    match qrrender.to_raster(symbol(), qrrender.with_scale(qrrender.default_style(), 4))
+        Err(e) => test.fail(e.message())
+        Ok(r)  =>
+            test.assert(r.width == 116)
+            test.assert(r.height == r.width)
+            test.assert(list.len(r.mask) == 116 * 116)
+
+    test.case("the quiet zone is light, so the corner is zero")
+    match qrrender.to_raster(symbol(), qrrender.default_style())
+        Err(e) => test.fail(e.message())
+        Ok(r)  => test.assert(list.get(r.mask, 0) == 0)
+
+    test.case("and the finder pattern is dark, so the module at (4, 4) is one")
+    match qrrender.to_raster(symbol(), qrrender.default_style())
+        Err(e) => test.fail(e.message())
+        Ok(r)  => test.assert(list.get(r.mask, 4 * r.width + 4) == 1)
+
+@test
+fn test_the_mask_is_painted_only_when_a_caller_asks() [io]
+    test.case("grey is one byte a pixel")
+    match qrrender.to_raster(symbol(), qrrender.default_style())
+        Err(e) => test.fail(e.message())
+        Ok(r)  =>
+            let grey = qrrender.to_grey8(r, qrrender.default_style())
+            test.assert(list.len(grey) == list.len(r.mask))
+            test.assert(list.get(grey, 0) == 255)
+
+    test.case("rgba is four")
+    match qrrender.to_raster(symbol(), qrrender.default_style())
+        Err(e) => test.fail(e.message())
+        Ok(r)  =>
+            let rgba = qrrender.to_rgba8(r, qrrender.default_style())
+            test.assert(list.len(rgba) == list.len(r.mask) * 4)
+            test.assert(list.get(rgba, 3) == 255)

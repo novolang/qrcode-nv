@@ -1,0 +1,225 @@
+// qrversion_tests.nv — the forty sizes and their tables, against
+// ISO/IEC 18004 § 6.1, § 7.5.1 Table 9, § 7.7 and Annex D.
+//
+// RED ON PURPOSE: every body under `src/` is a `todo()`, so every
+// assertion here reaches `not implemented: qrcode-nv.qrversion.<fn>`.
+
+use std.test
+use std.list
+use qrfault
+use qrmode
+use qrversion
+
+// The version a number names.  Every number this suite passes is
+// inside 1 to 40, so `!` unwrapping is a statement that a refusal here
+// would be the refusal being wrong rather than the number.
+fn v(n: Int) -> QrVersion
+    qrversion.version(n)!
+
+@test
+fn test_a_version_is_range_checked_when_it_is_built() [io]
+    test.case("1 and 40 are versions")
+    match qrversion.version(1)
+        Ok(x)  => test.assert(qrversion.number_of(x) == 1)
+        Err(_) => test.fail("1 is a version")
+    match qrversion.version(40)
+        Ok(x)  => test.assert(qrversion.number_of(x) == 40)
+        Err(_) => test.fail("40 is a version")
+
+    test.case("0 and 41 are not")
+    match qrversion.version(0)
+        Ok(_)  => test.fail("0 is not a version")
+        Err(e) => test.assert(qrfault.code(e) == "version_out_of_range")
+    match qrversion.version(41)
+        Ok(_)  => test.fail("41 is not a version")
+        Err(e) => test.assert(qrfault.code(e) == "version_out_of_range")
+
+    test.case("the two bounds are stated as constants")
+    test.assert(qrversion.QR_MIN_VERSION == 1)
+    test.assert(qrversion.QR_MAX_VERSION == 40)
+
+@test
+fn test_the_side_is_four_v_plus_seventeen() [io]
+    // § 6.1.
+    test.case("the three sizes everyone knows")
+    test.assert(qrversion.side_modules(v(1)) == 21)
+    test.assert(qrversion.side_modules(v(7)) == 45)
+    test.assert(qrversion.side_modules(v(40)) == 177)
+
+@test
+fn test_the_alignment_pattern_coordinates_are_table_e_1() [io]
+    test.case("version 1 has none")
+    test.assert(list.len(qrversion.alignment_centres(v(1))) == 0)
+
+    test.case("version 2 has the single pair 6 and 18")
+    let two = qrversion.alignment_centres(v(2))
+    test.assert(list.len(two) == 2)
+    test.assert(list.get(two, 0) == 6)
+    test.assert(list.get(two, 1) == 18)
+
+    test.case("version 7 is 6, 22, 38")
+    let seven = qrversion.alignment_centres(v(7))
+    test.assert(list.len(seven) == 3)
+    test.assert(list.get(seven, 1) == 22)
+
+    test.case("version 32 is 6, 34, 60, 86, 112, 138")
+    test.assert(list.len(qrversion.alignment_centres(v(32))) == 6)
+
+    test.case("and every row starts at 6")
+    test.assert(list.get(qrversion.alignment_centres(v(40)), 0) == 6)
+
+@test
+fn test_the_codeword_counts_are_the_standards() [io]
+    test.case("version 1 holds 26 codewords in total")
+    test.assert(qrversion.total_codewords(v(1)) == 26)
+
+    test.case("and 19, 16, 13, 9 of them are data at L, M, Q, H")
+    test.assert(qrversion.data_codewords(v(1), QrEcLow) == 19)
+    test.assert(qrversion.data_codewords(v(1), QrEcMedium) == 16)
+    test.assert(qrversion.data_codewords(v(1), QrEcQuartile) == 13)
+    test.assert(qrversion.data_codewords(v(1), QrEcHigh) == 9)
+
+    test.case("the rest is error correction, at every level")
+    test.assert(qrversion.ec_codewords(v(1), QrEcLow) == 7)
+    test.assert(qrversion.ec_codewords(v(1), QrEcHigh) == 17)
+
+    test.case("version 40 holds 3706 codewords")
+    test.assert(qrversion.total_codewords(v(40)) == 3706)
+    test.assert(qrversion.data_codewords(v(40), QrEcLow) == 2956)
+
+    test.case("the capacity in bits is eight times the data codewords")
+    test.assert(qrversion.data_bits(v(1), QrEcLow) == 152)
+    test.assert(qrversion.data_bits(v(1), QrEcMedium) == 128)
+
+@test
+fn test_the_block_plan_has_two_groups_that_differ_by_one() [io]
+    // § 7.5.1, Table 9.  The place an implementation that treats every
+    // block as the same size produces a symbol that scans on some
+    // readers and not others.
+    test.case("version 1 at L is one block of 19 with 7 correction codewords")
+    let p1 = qrversion.block_plan(v(1), QrEcLow)
+    test.assert(p1.ec_per_block == 7)
+    test.assert(p1.group1_blocks == 1)
+    test.assert(p1.group1_data == 19)
+    test.assert(p1.group2_blocks == 0)
+    test.assert(qrversion.block_count(p1) == 1)
+
+    test.case("version 5 at Q is two blocks of 15 and two of 16")
+    let p5 = qrversion.block_plan(v(5), QrEcQuartile)
+    test.assert(p5.ec_per_block == 18)
+    test.assert(p5.group1_blocks == 2)
+    test.assert(p5.group1_data == 15)
+    test.assert(p5.group2_blocks == 2)
+    test.assert(p5.group2_data == 16)
+    test.assert(qrversion.block_count(p5) == 4)
+
+    test.case("a second group is always exactly one codeword larger")
+    test.assert(p5.group2_data == p5.group1_data + 1)
+
+    test.case("and the plan accounts for every data codeword")
+    test.assert(p5.group1_blocks * p5.group1_data + p5.group2_blocks * p5.group2_data
+                == qrversion.data_codewords(v(5), QrEcQuartile))
+
+@test
+fn test_the_remainder_bits_are_a_property_of_the_version_alone() [io]
+    // § 7.7.  They are always zero and they are not capacity.
+    test.case("version 1 has none")
+    test.assert(qrversion.remainder_bits(v(1)) == 0)
+
+    test.case("versions 2 to 6 have seven")
+    test.assert(qrversion.remainder_bits(v(2)) == 7)
+    test.assert(qrversion.remainder_bits(v(6)) == 7)
+
+    test.case("versions 14 to 20 have three")
+    test.assert(qrversion.remainder_bits(v(14)) == 3)
+
+    test.case("versions 21 to 27 have four")
+    test.assert(qrversion.remainder_bits(v(21)) == 4)
+
+    test.case("and 35 to 40 have none again")
+    test.assert(qrversion.remainder_bits(v(40)) == 0)
+
+@test
+fn test_the_single_mode_capacities_are_annex_d() [io]
+    test.case("version 1 at L: 41 digits, 25 alphanumeric, 17 bytes, 10 kanji")
+    test.assert(qrversion.capacity_chars(v(1), QrEcLow, QrNumeric) == 41)
+    test.assert(qrversion.capacity_chars(v(1), QrEcLow, QrAlphanumeric) == 25)
+    test.assert(qrversion.capacity_chars(v(1), QrEcLow, QrByte) == 17)
+    test.assert(qrversion.capacity_chars(v(1), QrEcLow, QrKanji) == 10)
+
+    test.case("version 40 at L: 7089 digits and 2953 bytes")
+    test.assert(qrversion.capacity_chars(v(40), QrEcLow, QrNumeric) == 7089)
+    test.assert(qrversion.capacity_chars(v(40), QrEcLow, QrByte) == 2953)
+
+    test.case("version 40 at H is less than half of that")
+    test.assert(qrversion.capacity_chars(v(40), QrEcHigh, QrByte) == 1273)
+
+@test
+fn test_the_smallest_version_is_a_search_and_not_a_formula() [io]
+    test.case("seven digits fit version 1 at every level")
+    match qrmode.numeric_segment("8675309")
+        Err(_) => test.fail("those are digits")
+        Ok(s)  =>
+            match qrversion.smallest_for([s], QrEcHigh, 1, 40)
+                Ok(x)  => test.assert(qrversion.number_of(x) == 1)
+                Err(e) => test.fail(e.message())
+
+    test.case("a pinned range that is too small refuses RETRYABLY")
+    // The distinction that keeps an automatic retry from looping: a
+    // pin the caller can raise, against the end of the format.
+    match qrmode.alphanumeric_segment("HELLO WORLD HELLO WORLD HELLO WORLD")
+        Err(_) => test.fail("all in Table 5")
+        Ok(s)  =>
+            match qrversion.smallest_for([s], QrEcHigh, 1, 1)
+                Ok(_)  => test.fail("that does not fit version 1 at H")
+                Err(e) =>
+                    test.assert(qrfault.code(e) == "version_too_small")
+                    test.assert(qrfault.is_retryable(e))
+                    test.assert(qrfault.shortfall_bits(e) > 0)
+
+    test.case("and the search starts at min, not at 1")
+    match qrmode.numeric_segment("8675309")
+        Err(_) => test.fail("those are digits")
+        Ok(s)  =>
+            match qrversion.smallest_for([s], QrEcLow, 5, 40)
+                Ok(x)  => test.assert(qrversion.number_of(x) == 5)
+                Err(e) => test.fail(e.message())
+
+@test
+fn test_the_strongest_level_is_the_other_half_of_the_size_question() [io]
+    test.case("a short payload in version 4 takes level H")
+    match qrmode.numeric_segment("8675309")
+        Err(_) => test.fail("those are digits")
+        Ok(s)  =>
+            match qrversion.strongest_level([s], 4)
+                Some(e) => test.assert(qrmode.ec_name(e) == "H")
+                None    => test.fail("seven digits fit version 4 at H")
+
+    test.case("and a payload that fits nowhere answers None")
+    match qrmode.alphanumeric_segment("HELLO WORLD HELLO WORLD HELLO WORLD HELLO")
+        Err(_) => test.fail("all in Table 5")
+        Ok(s)  =>
+            match qrversion.strongest_level([s], 1)
+                Some(_) => test.fail("that does not fit version 1 at any level")
+                None    => test.assert(true)
+
+@test
+fn test_the_format_and_version_information_are_bch_coded() [io]
+    // § 7.9 and § 7.10.  Two of the published values, which is what
+    // catches a generator polynomial written down wrongly.
+    test.case("version information is absent below version 7")
+    test.assert(qrversion.version_info_bits(v(6)) == 0)
+
+    test.case("and version 7's is 0x07C94")
+    test.assert(qrversion.version_info_bits(v(7)) == 0x07C94)
+
+    test.case("version 40's is 0x28C69")
+    test.assert(qrversion.version_info_bits(v(40)) == 0x28C69)
+
+    test.case("format information for level M and mask 0 is 0x5412")
+    // The all-zero data word XORed with the 0x5412 mask of § 7.9.1 —
+    // the value that proves the mask is applied at all.
+    test.assert(qrversion.format_info_bits(QrEcMedium, 0) == 0x5412)
+
+    test.case("level L and mask 0 is 0x77C4")
+    test.assert(qrversion.format_info_bits(QrEcLow, 0) == 0x77C4)

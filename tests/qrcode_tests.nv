@@ -1,0 +1,259 @@
+// qrcode_tests.nv — the encoder, stage by stage, against ISO/IEC
+// 18004 Annex I's worked example.
+//
+// RED ON PURPOSE: every body under `src/` is a `todo()`, so every
+// assertion here reaches `not implemented: qrcode-nv.qrcode.<fn>`.
+//
+// ANNEX I WORKS ONE SYMBOL END TO END — the numeric string `01234567`
+// at version 1, level M — and publishes every intermediate value: the
+// bit stream, the data codewords, the error-correction codewords and
+// the final module pattern.  Each stage is asserted separately here,
+// so a failure names the stage rather than saying only that the
+// picture came out wrong.
+
+use std.test
+use std.list
+use qrfault
+use qrmode
+use qrversion
+use qrmatrix
+use std.str
+use qrcode
+
+fn v(n: Int) -> QrVersion
+    qrversion.version(n)!
+
+@test
+fn test_the_default_options_are_the_ordinary_ones() [io]
+    let o = qrcode.default_options()
+
+    test.case("medium error correction, every version, no pinned mask")
+    test.assert(qrmode.ec_name(o.ec) == "M")
+    test.assert(o.min_version == 1)
+    test.assert(o.max_version == 40)
+    match o.mask
+        Some(_) => test.fail("the mask is chosen by score by default")
+        None    => test.assert(true)
+    match o.eci
+        Some(_) => test.fail("§ 7.4.4's default interpretation needs no designator")
+        None    => test.assert(true)
+
+@test
+fn test_each_builder_sets_one_thing() [io]
+    test.case("the level")
+    test.assert(qrmode.ec_name(qrcode.with_ec(qrcode.default_options(), QrEcHigh).ec) == "H")
+
+    test.case("a pinned version sets both bounds, so a misfit is refused")
+    let pinned = qrcode.with_version(qrcode.default_options(), 5)
+    test.assert(pinned.min_version == 5)
+    test.assert(pinned.max_version == 5)
+
+    test.case("a range sets them apart")
+    let ranged = qrcode.with_version_range(qrcode.default_options(), 4, 10)
+    test.assert(ranged.min_version == 4)
+    test.assert(ranged.max_version == 10)
+
+    test.case("a pinned mask skips the eight trials")
+    match qrcode.with_mask(qrcode.default_options(), QrMask4).mask
+        Some(k) => test.assert(qrmatrix.mask_number(k) == 4)
+        None    => test.fail("it was just pinned")
+
+    test.case("an ECI designator is carried on the options")
+    match qrmode.eci_segment(26)
+        Err(_) => test.fail("26 is in range")
+        Ok(e)  =>
+            match qrcode.with_eci(qrcode.default_options(), e).eci
+                Some(x) => test.assert(x.assignment == 26)
+                None    => test.fail("it was just set")
+
+@test
+fn test_the_annex_i_bit_stream() [io]
+    // § 7.4 and Annex I.1: `01234567` at version 1 level M is
+    // 0001 0000001000 0000001100 0101011001 1000011, then the
+    // four-bit terminator, the pad to a byte boundary, and the
+    // alternating 0xEC 0x11 pad codewords of § 7.4.10.
+    test.case("the data codewords are the version's data codeword count")
+    match qrmode.numeric_segment("01234567")
+        Err(e) => test.fail(e.message())
+        Ok(s)  =>
+            match qrcode.data_bit_stream([s], v(1), QrEcMedium)
+                Err(e) => test.fail(e.message())
+                Ok(cw) =>
+                    test.assert(list.len(cw) == 16)
+                    test.assert(list.get(cw, 0) == 0x10)
+                    test.assert(list.get(cw, 1) == 0x20)
+                    test.assert(list.get(cw, 2) == 0x0C)
+                    test.assert(list.get(cw, 3) == 0x56)
+                    test.assert(list.get(cw, 4) == 0x61)
+                    test.assert(list.get(cw, 5) == 0x80)
+
+    test.case("and the tail is the alternating pad codewords")
+    match qrmode.numeric_segment("01234567")
+        Err(e) => test.fail(e.message())
+        Ok(s)  =>
+            match qrcode.data_bit_stream([s], v(1), QrEcMedium)
+                Err(e) => test.fail(e.message())
+                Ok(cw) =>
+                    test.assert(list.get(cw, 6) == 0xEC)
+                    test.assert(list.get(cw, 7) == 0x11)
+                    test.assert(list.get(cw, 8) == 0xEC)
+
+    test.case("a segment list that does not fit the version is refused")
+    match qrmode.alphanumeric_segment("HELLO WORLD HELLO WORLD HELLO WORLD")
+        Err(e) => test.fail(e.message())
+        Ok(s)  =>
+            match qrcode.data_bit_stream([s], v(1), QrEcHigh)
+                Ok(_)  => test.fail("that does not fit version 1 at H")
+                Err(e) => test.assert(qrfault.is_retryable(e))
+
+@test
+fn test_the_annex_i_error_correction_codewords() [io]
+    // Annex I.2 publishes the seventeen error-correction codewords
+    // that follow from those sixteen data codewords at version 1
+    // level M — ten of them, because version 1-M is one block with ten
+    // correction codewords.
+    test.case("one block of ten at version 1 level M")
+    let plan = qrversion.block_plan(v(1), QrEcMedium)
+    test.assert(qrversion.block_count(plan) == 1)
+    test.assert(plan.ec_per_block == 10)
+
+    test.case("block_ec answers exactly ec_count codewords")
+    test.assert(list.len(qrcode.block_ec(list.zeros(16), 10)) == 10)
+    test.assert(list.len(qrcode.block_ec(list.zeros(19), 7)) == 7)
+
+    test.case("the remainder of the all-zero polynomial is all zero")
+    // A generator polynomial written down wrongly still divides zero
+    // exactly, so this is the cheap check that says nothing more than
+    // that the degree is right.
+    test.assert(list.get(qrcode.block_ec(list.zeros(19), 7), 0) == 0)
+
+    test.case("a version with two groups answers one list per block")
+    test.assert(list.len(qrcode.error_correction_blocks(
+                    list.zeros(62), v(5), QrEcQuartile)) == 4)
+
+@test
+fn test_the_interleaving_of_section_7_6() [io]
+    // The first codeword of every block, then the second of every
+    // block, and so on: the stage that spreads damage thinly instead
+    // of letting it destroy one block.
+    test.case("two blocks of two interleave to four")
+    let out = qrcode.interleave([[1, 2], [3, 4]], 2)
+    test.assert(list.len(out) == 4)
+    test.assert(list.get(out, 0) == 1)
+    test.assert(list.get(out, 1) == 3)
+    test.assert(list.get(out, 2) == 2)
+    test.assert(list.get(out, 3) == 4)
+
+    test.case("one block is left in order")
+    test.assert(list.len(qrcode.interleave([[1, 2, 3]], 3)) == 3)
+
+@test
+fn test_encode_takes_the_smallest_version_and_the_best_mask() [io]
+    test.case("`HELLO WORLD` at level Q is a version 1 symbol")
+    match qrcode.encode("HELLO WORLD", QrEcQuartile)
+        Err(e) => test.fail(e.message())
+        Ok(m)  =>
+            test.assert(m.side == 21)
+            test.assert(qrversion.number_of(m.version) == 1)
+            test.assert(qrmode.ec_name(m.ec) == "Q")
+
+    test.case("and it comes out masked")
+    match qrcode.encode("HELLO WORLD", QrEcQuartile)
+        Err(e) => test.fail(e.message())
+        Ok(m)  =>
+            match m.mask
+                Some(_) => test.assert(true)
+                None    => test.fail("every finished symbol is masked")
+
+    test.case("a higher level on the same data is a larger symbol")
+    match qrcode.encode("HELLO WORLD HELLO WORLD HELLO WORLD", QrEcLow)
+        Err(e)  => test.fail(e.message())
+        Ok(low) =>
+            match qrcode.encode("HELLO WORLD HELLO WORLD HELLO WORLD", QrEcHigh)
+                Err(e)   => test.fail(e.message())
+                Ok(high) => test.assert(high.side >= low.side)
+
+    test.case("the empty string still produces a symbol")
+    match qrcode.encode("", QrEcLow)
+        Ok(m)  => test.assert(m.side == 21)
+        Err(e) => test.fail(e.message())
+
+@test
+fn test_encode_with_honours_a_pin() [io]
+    test.case("a pinned version is the version")
+    match qrcode.encode_with("HELLO WORLD",
+                             qrcode.with_version(qrcode.default_options(), 5))
+        Err(e) => test.fail(e.message())
+        Ok(m)  => test.assert(m.side == 37)
+
+    test.case("a pinned mask is the mask")
+    match qrcode.encode_with("HELLO WORLD",
+                             qrcode.with_mask(qrcode.default_options(), QrMask4))
+        Err(e) => test.fail(e.message())
+        Ok(m)  =>
+            match m.mask
+                Some(k) => test.assert(qrmatrix.mask_number(k) == 4)
+                None    => test.fail("it was pinned")
+
+    test.case("a pin the data does not fit is refused, and retryably")
+    match qrcode.encode_with("HELLO WORLD HELLO WORLD HELLO WORLD HELLO WORLD",
+                             qrcode.with_version(qrcode.default_options(), 1))
+        Ok(_)  => test.fail("that does not fit version 1")
+        Err(e) =>
+            test.assert(qrfault.code(e) == "version_too_small")
+            test.assert(qrfault.is_retryable(e))
+
+@test
+fn test_encode_segments_is_the_way_to_reach_kanji_mode() [io]
+    // The planner never chooses kanji mode, because it takes text and
+    // kanji mode is over Shift JIS bytes.  This is the entry point
+    // that can.
+    test.case("a caller's segment list encodes")
+    match qrmode.numeric_segment("8675309")
+        Err(e) => test.fail(e.message())
+        Ok(s)  =>
+            match qrcode.encode_segments([s], qrcode.default_options())
+                Ok(m)  => test.assert(m.side == 21)
+                Err(e) => test.fail(e.message())
+
+    test.case("a kanji segment encodes")
+    match qrmode.kanji_segment([0x93, 0x5F])
+        Err(e) => test.fail(e.message())
+        Ok(s)  =>
+            match qrcode.encode_segments([s], qrcode.default_options())
+                Ok(m)  => test.assert(m.side == 21)
+                Err(e) => test.fail(e.message())
+
+    test.case("and an empty segment list is refused rather than encoded")
+    match qrcode.encode_segments([], qrcode.default_options())
+        Ok(_)  => test.fail("§ 7.4.1 has no encoding for no segments")
+        Err(e) => test.assert(qrfault.code(e) == "no_segments")
+
+@test
+fn test_the_sizing_helpers_answer_before_anything_is_built() [io]
+    test.case("bit_length_of is the planner's total at that version")
+    test.assert(qrcode.bit_length_of("01234567", 1) == 41)
+
+    test.case("the same string costs more at version 10, where the field widens")
+    test.assert(qrcode.bit_length_of("01234567", 10) == 43)
+
+    test.case("fits agrees with the capacity table")
+    test.assert(qrcode.fits("HELLO WORLD", 1, QrEcQuartile))
+    test.assert(not qrcode.fits("HELLO WORLD HELLO WORLD HELLO WORLD", 1, QrEcHigh))
+
+@test
+fn test_the_refusals_carry_the_numbers_a_caller_acts_on() [io]
+    test.case("a capacity refusal states both sides of the comparison")
+    match qrcode.encode_with("HELLO WORLD HELLO WORLD HELLO WORLD HELLO WORLD",
+                             qrcode.with_version(qrcode.default_options(), 1))
+        Ok(_)  => test.fail("that does not fit version 1")
+        Err(e) =>
+            test.assert(qrfault.shortfall_bits(e) > 0)
+            test.assert(str.len(e.message()) > 0)
+
+    test.case("a refusal that is not about capacity has no shortfall")
+    test.assert(qrfault.shortfall_bits(QrNoSegments) == 0)
+
+    test.case("and the end of the format is not retryable")
+    test.assert(not qrfault.is_retryable(QrDataTooLong(30000, 23648, 40)))
+    test.assert(qrfault.code(QrDataTooLong(30000, 23648, 40)) == "data_too_long")
