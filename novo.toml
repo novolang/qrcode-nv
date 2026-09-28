@@ -1,6 +1,6 @@
 [package]
 name        = "qrcode-nv"
-version     = "0.0.1"
+version     = "0.0.2"
 description = "QR Code symbols to ISO/IEC 18004: the four data modes with segment planning, all forty versions, the four error-correction levels, Reed-Solomon block interleaving, the eight data masks chosen by the standard's own penalty score, and rendering to text, to an SVG document and to a one-byte-per-module raster mask.  Interface only — every body is a todo()."
 license     = "Apache-2.0"
 
@@ -43,7 +43,7 @@ novo        = ">= 0.9.0"
 # package builds and `svgwrite.to_string` serialises it, so the caller
 # chooses between a node and a file rather than being handed a file.
 # `core`, so the layer rule holds.
-svg-nv = "^0.0.1"
+svg-nv = "^0.1.0"
 
 # color-nv supplies `Srgba8`, the type svg-nv's styles are painted
 # with.  A QR Code has exactly two colours and the standard is strict
@@ -53,4 +53,4 @@ svg-nv = "^0.0.1"
 # rather than constants, and they are spelled in the same type the
 # drawing library uses so that no conversion happens at the boundary.
 # `core`, so the layer rule holds.
-color-nv = "^0.0.1"
+color-nv = "^0.1.1"
